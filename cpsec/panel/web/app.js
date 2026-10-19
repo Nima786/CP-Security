@@ -33,6 +33,10 @@
     settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
     check: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
     alert: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
+    info: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
+    advisor: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z',
+    setup: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
+    more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
   };
   function icon(name) {
     const svg = document.createElementNS(NS, 'svg');
@@ -45,7 +49,7 @@
   }
 
   // ------------------------------------------------------------------ state, talking to the server
-  const S = { me: null, csrf: '', view: 'overview', problems: 0, drawId: 0, pollTimer: null };
+  const S = { me: null, csrf: '', view: 'overview', problems: 0, drawId: 0, pollTimer: null, twofa: false, more: false, advice: 0 };
 
   async function api(path, opts = {}) {
     const init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
@@ -128,48 +132,82 @@
     const form = h('form', { class: 'stack', autocomplete: 'on' },
       field('username', 'Username', { type: 'text', autocomplete: 'username', required: true, autofocus: true }),
       field('password', 'Password', { type: 'password', autocomplete: 'current-password', required: true }),
-      field('code', '6-digit code from your authenticator app', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9 ]*', maxlength: 8, required: true }),
+      // the code is only asked for when the owner switched the second step on
+      S.twofa ? field('code', '6-digit code from your authenticator app', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9 ]*', maxlength: 8, required: true }) : null,
       error,
       h('button', { class: 'btn primary', type: 'submit', text: 'Sign in', style: 'width:100%' }));
     form.addEventListener('submit', async ev => {
       ev.preventDefault();
       error.textContent = '';
       const btn = $('button', form); btn.disabled = true;
+      const code = $('#code');
       const { data } = await api('/api/login', { method: 'POST', body: {
-        username: $('#username').value, password: $('#password').value, code: $('#code').value } });
+        username: $('#username').value, password: $('#password').value, code: code ? code.value : '' } });
       btn.disabled = false;
-      if (data.ok) { await boot(); } else { error.textContent = data.message || 'Could not sign in.'; $('#code').value = ''; }
+      if (data.ok) { await boot(); } else { error.textContent = data.message || 'Could not sign in.'; if (code) code.value = ''; }
     });
     return h('div', { class: 'login' }, h('div', { class: 'card' },
       h('div', { class: 'brand' }, h('img', { src: '/favicon.svg', alt: '' }), 'CP-Security'),
-      h('p', { class: 'muted', text: 'Sign in to look after your server.' }), form));
+      h('p', { class: 'muted', text: 'Sign in to look after your server.' }), form,
+      h('p', { class: 'muted small login-note', text: 'Locked out after a change of internet address? Run  security myip  on the server.' })));
   }
 
   // ------------------------------------------------------------------ the frame around every page
-  // id, long name, icon, short name for the phone's bottom bar
+  // id, long name, icon, short name for the phone's bottom bar, menu group, shown in the phone's bottom bar
   const NAV = [
-    ['overview', 'Overview', 'overview', 'Overview'], ['blocked', 'Blocked', 'blocked', 'Blocked'],
-    ['access', 'Admin access', 'access', 'Access'], ['firewall', 'Web firewall', 'firewall', 'Firewall'],
-    ['updates', 'Updates', 'updates', 'Updates'], ['settings', 'Settings', 'settings', 'Settings'],
+    ['overview', 'Overview', 'overview', 'Overview', 'Protection', true],
+    ['advisor', 'Advisor', 'advisor', 'Advisor', 'Protection', true],
+    ['blocked', 'Blocked', 'blocked', 'Blocked', 'Protection', true],
+    ['access', 'Admin access', 'access', 'Access', 'Protection', false],
+    ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
+    ['updates', 'Updates', 'updates', 'Updates', 'Protection', false],
+    ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
+    ['settings', 'Settings', 'settings', 'Settings', 'Manage', false],
   ];
+  const isSmall = () => matchMedia('(max-width:900px)').matches;
 
   function shell(main) {
-    const small = matchMedia('(max-width:900px)').matches;
-    const nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, NAV.map(([id, label, ic, short]) =>
-      h('a', { href: '#/' + id, 'aria-current': S.view === id ? 'page' : null },
+    const small = isSmall();
+    const link = ([id, label, ic, short]) =>
+      h('a', { href: '#/' + id, 'aria-current': S.view === id ? 'page' : null, onclick: () => { S.more = false; } },
         icon(ic), h('span', { text: small ? short : label }),
-        id === 'overview' && S.problems ? h('span', { class: 'dot', title: S.problems + ' need attention' }) : null)));
+        id === 'overview' && S.problems ? h('span', { class: 'dot', title: S.problems + ' need attention' }) : null,
+        id === 'advisor' && S.advice ? h('span', { class: 'dot warn', title: S.advice + ' suggestions' }) : null);
     const signOut = () => h('button', { class: 'btn small', type: 'button', text: 'Sign out', onclick: async () => {
-      await api('/api/logout', { method: 'POST', body: {} }); S.me = null; draw(); } });
+      await api('/api/logout', { method: 'POST', body: {} }); S.me = null; S.more = false; draw(); } });
+
+    let nav;
+    if (small) {
+      // phone: the four most used pages and a "More" button that opens the rest
+      const rest = NAV.filter(n => !n[5]);
+      const moreActive = rest.some(n => n[0] === S.view);
+      nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, NAV.filter(n => n[5]).map(link),
+        h('button', { type: 'button', class: 'more-btn', 'aria-expanded': String(S.more), 'aria-controls': 'more-sheet', 'aria-current': moreActive ? 'page' : null,
+          onclick: ev => {
+            S.more = !S.more;
+            $('#more-sheet').hidden = !S.more;
+            ev.currentTarget.setAttribute('aria-expanded', String(S.more));
+          } }, icon('more'), h('span', { text: 'More' })));
+    } else {
+      const groups = [...new Set(NAV.map(n => n[4]))];
+      nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, groups.map(g =>
+        h('div', { class: 'nav-group' }, h('div', { class: 'nav-title', text: g }), NAV.filter(n => n[4] === g).map(link))));
+    }
+    const sheet = small
+      ? h('div', { class: 'sheet', id: 'more-sheet', hidden: !S.more },
+        NAV.filter(n => !n[5]).map(link),
+        h('div', { class: 'sheet-foot' }, h('span', { class: 'muted small', text: 'Signed in as ' + S.me.user }), signOut()))
+      : null;
     return h('div', {},
       h('div', { class: 'topbar' }, h('div', { class: 'brand' }, h('img', { src: '/favicon.svg', width: 28, height: 28, alt: '' }), 'CP-Security'),
-        h('span', { class: 'right' }, signOut())),
+        S.me.demo ? badge('demo', 'warn') : null, h('span', { class: 'right' }, signOut())),
       h('div', { class: 'shell' },
         h('aside', { class: 'side' }, h('div', { class: 'brand' }, h('img', { src: '/favicon.svg', alt: '' }), 'CP-Security'), nav,
           h('div', { class: 'foot small muted' }, h('div', { text: 'Signed in as ' + S.me.user }),
             S.me.demo ? h('div', { text: 'DEMO – made-up data' }) : null,
             h('div', { class: 'row', style: 'margin-top:.5rem' }, signOut()))),
-        h('main', { class: 'main', id: 'main' }, main)));
+        h('main', { class: 'main', id: 'main' }, main)),
+      sheet);
   }
 
   function pageHead(title, sub, ...actions) {
@@ -184,11 +222,27 @@
     const ok = S.problems === 0;
     const sites = data.sites || { sites: [], new_problems: [], old_problems: [] };
     const sorted = sites.sites.slice().sort((a, b) => Number(a.ok) - Number(b.ok) || a.domain.localeCompare(b.domain));
+    // the advice is gathered in the background so the page itself appears at once
+    const teaser = h('div', {});
+    api('/api/advisor').then(({ data: a }) => {
+      if (!a || !a.findings) return;
+      const todo = a.findings.filter(f => f.level === 'bad' || f.level === 'warn');
+      S.advice = todo.length;
+      if (!todo.length) return;
+      teaser.replaceChildren(h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: 'Advice for you' }), badge(todo.length + ' suggestion' + (todo.length > 1 ? 's' : ''), 'warn'),
+          h('a', { class: 'btn small right', href: '#/advisor', text: 'See all advice' })),
+        h('div', { class: 'mini-list' }, todo.slice(0, 3).map(f => h('div', { class: 'mini ' + f.level }, icon(f.level === 'bad' ? 'alert' : 'info'),
+          h('div', {}, h('div', { class: 'what', text: f.title }), f.advice ? h('div', { class: 'text', text: f.advice }) : null))))));
+      const dot = document.querySelector('.nav a[href="#/advisor"]');
+      if (dot && !dot.querySelector('.dot')) dot.append(h('span', { class: 'dot warn', title: todo.length + ' suggestions' }));
+    });
     return h('div', { class: 'stack' },
       pageHead('Overview', 'Checked ' + data.checked_at, h('button', { class: 'btn', type: 'button', text: 'Check again', onclick: () => redraw(true) })),
       h('div', { class: 'banner ' + (ok ? 'ok' : 'bad') }, icon(ok ? 'check' : 'alert'),
         h('div', {}, h('div', { text: ok ? 'Everything looks fine' : S.problems + ' thing' + (S.problems > 1 ? 's' : '') + ' need attention' }),
           h('div', { class: 'sub', text: ok ? 'The protections are on and your websites are answering.' : 'Look at the items marked in red below.' }))),
+      teaser,
       h('div', { class: 'grid tiles' },
         tile('Blocked in the last 24 hours', data.blocked_24h),
         tile('Web firewall', data.waf_mode ? MODES[data.waf_mode] : 'Not set up'),
@@ -253,6 +307,13 @@
       const r = await act('/api/access/add', { address: $('#ac-addr').value, label: $('#ac-label').value }, 'Updating the lock…');
       if (r.ok) redraw();
     });
+    const neverForm = h('form', { class: 'inline-form' }, field('nb-addr', 'Add an address that must never be blocked', { type: 'text', required: true, placeholder: 'for example 45.60.0.99' }),
+      field('nb-label', 'Name', { type: 'text', placeholder: 'for example Monitoring', maxlength: 60 }), h('button', { class: 'btn', type: 'submit', text: 'Add' }));
+    neverForm.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const r = await act('/api/access/never/add', { address: $('#nb-addr').value, label: $('#nb-label').value }, 'Updating the blocker…');
+      if (r.ok) redraw();
+    });
     const remove = async t => {
       let confirmed = false;
       if (t.address === mine) {
@@ -281,9 +342,15 @@
           h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: () => remove(t) })))), 'No trusted addresses.')),
       card('Add a trusted address', addForm,
         h('p', { class: 'muted small', style: 'margin-top:.75rem', text: 'Use the public address (search Google for "what is my IP"). Addresses like 192.168.x.x only exist inside a home network and do not work.' })),
-      h('details', { class: 'card' }, h('summary', { text: 'Never blocked by the attack blocker (' + data.never_block.length + ')' }),
-        h('p', { class: 'muted small', text: 'Cloudflare and similar services. Blocking one of their addresses would cut off many real visitors.' }),
-        h('div', { class: 'stack' }, data.never_block.map(n => h('div', { class: 'row' }, h('span', { class: 'mono', text: n.address }), h('span', { class: 'muted', text: n.label }))))));
+      h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: 'Never blocked by the attack blocker' }), badge(String(data.never_block.length)),
+          h('span', { class: 'muted small right', text: 'Cloudflare, your office, a monitoring service…' })),
+        table(['Address', 'Name', ''], data.never_block.map(n => h('tr', {}, h('td', { class: 'mono', text: n.address }), h('td', { text: n.label }),
+          h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: async () => {
+            if (await confirmBox('Remove ' + n.address + '?', 'The blocker will be allowed to block it again if it keeps guessing passwords.', 'Remove', true)) {
+              await act('/api/access/never/remove', { address: n.address }, 'Updating the blocker…'); redraw(); } } })))),
+          'Nothing is on this list.'),
+        h('div', { class: 'card-foot' }, neverForm)));
   }
 
   // ------------------------------------------------------------------ web firewall
@@ -332,7 +399,10 @@
   async function viewFirewall() {
     const { data } = await api('/api/firewall');
     if (!data.installed) {
-      return h('div', { class: 'stack' }, pageHead('Web firewall'), card(null, h('p', { text: 'The web firewall is not set up on this server yet.' })));
+      return h('div', { class: 'stack' }, pageHead('Web firewall'),
+        card(null, h('p', { text: 'The web firewall is not set up on this server yet.' }),
+          h('p', { class: 'muted', text: 'The Setup page checks whether it can be added safely next to the security settings CyberPanel already has, and starts it in watch-only mode.' }),
+          h('a', { class: 'btn primary', href: '#/setup', text: 'Open Setup' })));
     }
     const sum = data.summary, day = sum.periods.day, week = sum.periods.week;
     const periodCard = (title, p) => h('section', { class: 'card' }, h('h2', { text: title }),
@@ -340,7 +410,9 @@
         data.mode === 'block' ? [', ', h('strong', { text: String(p.blocked) }), ' blocked'] : ' (nobody refused)'),
       p.rules.length ? h('div', { class: 'stack' }, p.rules.slice(0, 5).map(r => h('div', { class: 'row' }, h('span', { class: 'small', text: r.message }), h('span', { class: 'right' }, badge(String(r.count)))))) : h('p', { class: 'muted', text: 'Nothing recorded.' }));
     return h('div', { class: 'stack' },
-      pageHead('Web firewall', 'Watches the requests to your websites for typical hacking attempts (SQL injection, scripts, file tricks).'),
+      pageHead('Web firewall', 'Watches the requests to your websites for typical hacking attempts (SQL injection, scripts, file tricks).',
+        h('button', { class: 'btn', type: 'button', text: 'Run a test', title: 'Sends one harmless request that looks like an attack and checks that the firewall noticed it',
+          onclick: async () => { await act('/api/firewall/selftest', {}, 'Sending a harmless test request…'); } })),
       h('section', { class: 'card' }, h('h2', { text: 'Mode' }),
         h('div', { class: 'choices' }, ['off', 'watch', 'block'].map(m =>
           h('button', { class: 'choice', type: 'button', 'aria-pressed': String(data.mode === m), onclick: () => chooseMode(m, data.mode, data.threshold) },
@@ -407,12 +479,88 @@
   }
 
   // ------------------------------------------------------------------ settings
+  const minutes = seconds => Math.round(seconds / 60);
+
+  function blockerCard(b) {
+    const inputs = {};
+    const num = (name, key, value, min, max) => {
+      const el = h('input', { type: 'number', inputmode: 'numeric', min: String(min), max: String(max), value: String(value), required: true,
+        'aria-label': (b.names[name] || name) + ': ' + key });
+      inputs[name + '.' + key] = [el, value];
+      return el;
+    };
+    const rows = Object.keys(b.tuning).map(name => {
+      const t = b.tuning[name], L = b.limits;
+      const off = b.missing_logs.includes(name);
+      return h('tr', { class: off ? 'dim' : null },
+        h('td', {}, h('strong', { text: b.names[name] || name }), off ? h('div', { class: 'muted small', text: 'Not available: this server has no log file for it.' }) : null),
+        h('td', {}, num(name, 'maxretry', t.maxretry, L.maxretry[0], L.maxretry[1])),
+        h('td', {}, num(name, 'findtime', minutes(t.findtime), minutes(L.findtime[0]), minutes(L.findtime[1]))),
+        h('td', {}, num(name, 'bantime', minutes(t.bantime), minutes(L.bantime[0]), minutes(L.bantime[1]))));
+    });
+    const save = h('button', { class: 'btn primary', type: 'submit', text: 'Save these numbers' });
+    const form = h('form', {}, h('div', { class: 'table-wrap' }, h('table', { class: 'numbers' },
+      h('thead', {}, h('tr', {}, ['Protection', 'Block after this many wrong tries', '…within this many minutes', '…for this many minutes'].map(x => h('th', { scope: 'col', text: x })))),
+      h('tbody', {}, rows))), h('div', { class: 'card-foot' }, save));
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const changes = {};
+      for (const [id, [el, original]] of Object.entries(inputs)) {
+        const [name, key] = id.split('.');
+        const value = Number(el.value);
+        if (!Number.isInteger(value)) { toast('Please use whole numbers.', 'bad'); return; }
+        if (value !== original) (changes[name] = changes[name] || {})[key] = key === 'maxretry' ? value : value * 60;
+      }
+      if (!Object.keys(changes).length) { toast('Nothing was changed.'); return; }
+      const r = await act('/api/settings/blocker', { changes }, 'Applying to the blocker…');
+      if (r.ok) redraw();
+    });
+    return h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'How strict the attack blocker is' }),
+        h('span', { class: 'muted small right', text: 'Stricter means fewer tries and longer blocks. The defaults suit most servers.' })),
+      form);
+  }
+
+  function twoStepCard(s) {
+    const box = h('div', { class: 'stack' });
+    if (s.twofa) {
+      const off = h('form', { class: 'inline-form' }, field('tf-off-pw', 'Your password', { type: 'password', autocomplete: 'current-password', required: true }),
+        h('button', { class: 'btn danger', type: 'submit', text: 'Turn off' }));
+      off.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const r = await act('/api/settings/2fa/disable', { password: $('#tf-off-pw').value });
+        if (r.ok) { S.twofa = false; redraw(); }
+      });
+      box.append(h('p', {}, badge('on', 'ok'), ' Signing in asks for a 6-digit code from your authenticator app.'), off);
+    } else {
+      const start = h('form', { class: 'inline-form' }, field('tf-pw', 'Your password', { type: 'password', autocomplete: 'current-password', required: true }),
+        h('button', { class: 'btn', type: 'submit', text: 'Turn on' }));
+      start.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const { data } = await api('/api/settings/2fa/start', { method: 'POST', body: { password: $('#tf-pw').value } });
+        if (!data.ok) { toast(data.message, 'bad'); return; }
+        const confirm = h('form', { class: 'inline-form' }, field('tf-code', 'Code from the app', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, maxlength: 8 }),
+          h('button', { class: 'btn primary', type: 'submit', text: 'Confirm' }));
+        confirm.addEventListener('submit', async e2 => {
+          e2.preventDefault();
+          const r = await act('/api/settings/2fa/confirm', { code: $('#tf-code').value });
+          if (r.ok) { S.twofa = true; redraw(); }
+        });
+        box.replaceChildren(h('p', { text: 'Type this key into your authenticator app (choose "time based"):' }),
+          h('p', { class: 'mono secret', text: data.secret.match(/.{1,4}/g).join(' ') }), confirm);
+      });
+      box.append(h('p', {}, badge('off', ''), ' Signing in needs only the username and password. Add a second step if the panel is open to everyone.'), start);
+    }
+    return card('Two-step login (optional)', box);
+  }
+
   async function viewSettings() {
-    const [{ data: s }, { data: act_ }] = await Promise.all([api('/api/settings'), api('/api/activity')]);
+    const [{ data: s }, { data: act_ }, { data: b }] = await Promise.all([api('/api/settings'), api('/api/activity'), api('/api/settings/blocker')]);
+    S.twofa = !!s.twofa;
     let access = s.access;
     const accessCard = card('Who can reach this panel',
-      h('div', { class: 'choices' }, [['login', 'Anyone with the login', 'The login page is open to everyone, protected by your password and the 6-digit code. Best if your home address changes.'],
-        ['trusted', 'Trusted addresses only', 'Other addresses cannot even see the login page. Most secure, but you need the trusted list to be right.']].map(([v, t, d]) =>
+      h('div', { class: 'choices' }, [['login', 'Anyone with the login', 'The login page is open to everyone' + (s.twofa ? ', protected by your password and the 6-digit code.' : ', protected only by your password. Add the optional two-step login below.') + ' Best if your home address changes a lot.'],
+        ['trusted', 'Trusted addresses only', 'Other addresses cannot even see the login page. Most secure. If your address changes, run "security myip" on the server.']].map(([v, t, d]) =>
         h('button', { class: 'choice', type: 'button', 'aria-pressed': String(access === v), onclick: async () => {
           if (v === access) return;
           let confirmed = false;
@@ -434,35 +582,149 @@
       if (r.ok) pwForm.reset();
     });
 
-    const tfaBox = h('div', { class: 'stack' });
-    const tfaStart = h('form', { class: 'inline-form' }, field('tf-pw', 'Your password', { type: 'password', autocomplete: 'current-password', required: true }),
-      h('button', { class: 'btn', type: 'submit', text: 'Get a new key' }));
-    tfaStart.addEventListener('submit', async ev => {
-      ev.preventDefault();
-      const { data } = await api('/api/settings/2fa/start', { method: 'POST', body: { password: $('#tf-pw').value } });
-      if (!data.ok) { toast(data.message, 'bad'); return; }
-      const confirmForm = h('form', { class: 'inline-form' }, field('tf-code', 'Code from the app', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, maxlength: 8 }),
-        h('button', { class: 'btn primary', type: 'submit', text: 'Confirm' }));
-      confirmForm.addEventListener('submit', async e2 => {
-        e2.preventDefault();
-        const r = await act('/api/settings/2fa/confirm', { code: $('#tf-code').value });
-        if (r.ok) tfaBox.replaceChildren(h('p', { class: 'muted', text: 'Done.' }));
-      });
-      tfaBox.replaceChildren(h('p', { text: 'Type this key into your authenticator app (choose "time based"):' }),
-        h('p', { class: 'mono', style: 'font-size:1.1rem;word-break:break-all', text: data.secret.match(/.{1,4}/g).join(' ') }), confirmForm);
-    });
-    tfaBox.append(tfaStart);
+    const sv = s.server || {};
+    const cert = sv.certificate;
+    const about = card('About this panel', h('div', { class: 'kv-row stacked' },
+      [['Version', s.version], ['Address', s.domain ? 'https://' + s.domain + ':' + s.port : 'not set'],
+        ['Certificate', !cert ? 'not set' : cert.found ? (cert.days_left === null ? 'found' : cert.days_left + ' days left') : 'not found'],
+        ['Web server', (sv.web_server || 'none found') + (sv.web_server_version ? ' ' + sv.web_server_version : '')],
+        ['Your address', s.client_ip + (s.client_ip_trusted ? ' (trusted)' : '')]].map(([k, v]) =>
+        h('div', { class: 'kv' }, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v })))));
+
+    const baseline = card('Normal state of your websites',
+      h('p', { class: 'muted', text: 'The panel remembers how every website answers when all is well. Later it can tell a site that just broke from one that was always giving an error. Save again after you add or fix websites.' }),
+      h('button', { class: 'btn', type: 'button', text: 'Save today as normal', onclick: async () => {
+        await act('/api/settings/baseline', {}, 'Asking every website for its home page…'); } }));
 
     return h('div', { class: 'stack' },
-      pageHead('Settings', 'Signed in as ' + s.user + '. Version ' + s.version + '.'),
+      pageHead('Settings', 'Signed in as ' + s.user + '.'),
       accessCard,
-      h('div', { class: 'grid' }, card('Change password', pwForm), card('Authenticator app', h('p', { class: 'muted', text: 'Lost your phone or changed it? Get a new key for the 6-digit codes. The old key stops working.' }), tfaBox)),
+      h('div', { class: 'grid' }, card('Change password', pwForm), twoStepCard(s)),
+      blockerCard(b),
+      h('div', { class: 'grid' }, baseline, about),
       h('section', { class: 'card flush' }, h('div', { class: 'card-head' }, h('h2', { text: 'Recent activity' })),
         table(['When', 'What', 'Details'], act_.events.map(e => h('tr', {}, h('td', { class: 'mono small', text: e.when }), h('td', {}, badge(e.event.replace(/_/g, ' ').toLowerCase(), /FAIL|ERROR/.test(e.event) ? 'bad' : '')), h('td', { class: 'mono small muted', text: e.details }))), 'Nothing yet.')));
   }
 
+
+  // ------------------------------------------------------------------ advisor
+  function fixButton(fix) {
+    if (fix.kind === 'page') return h('a', { class: 'btn small', href: '#/' + fix.id, text: fix.label });
+    return h('button', { class: 'btn small primary', type: 'button', text: fix.label, onclick: async () => {
+      const r = await act('/api/advisor/fix', { id: fix.id }, 'Working…');
+      if (r.ok) redraw(true);
+    } });
+  }
+
+  async function viewAdvisor(refresh) {
+    const { data } = await api('/api/advisor' + (refresh ? '?refresh=1' : ''));
+    const c = data.counts;
+    S.advice = c.bad + c.warn;
+    const of = lvl => data.findings.filter(f => f.level === lvl);
+    const finding = f => h('article', { class: 'finding ' + f.level },
+      icon(f.level === 'ok' ? 'check' : f.level === 'info' ? 'info' : 'alert'),
+      h('div', { class: 'finding-body' }, h('h3', { text: f.title }),
+        f.detail ? h('p', { class: 'muted', text: f.detail }) : null,
+        f.advice ? h('p', { class: 'advice' }, h('strong', { text: 'What to do: ' }), f.advice) : null,
+        f.fix ? fixButton(f.fix) : null));
+    const banner = c.bad ? ['bad', 'alert', c.bad + ' thing' + (c.bad > 1 ? 's' : '') + ' need action now', 'These put your server at real risk. Start at the top.']
+      : c.warn ? ['warn', 'alert', c.warn + ' suggestion' + (c.warn > 1 ? 's' : ''), 'Nothing is on fire, but these are worth fixing soon.']
+        : ['ok', 'check', 'No problems found', 'The advisor looked at your server and found nothing to worry about.'];
+    const sv = data.server;
+    const section = (title, lvl) => of(lvl).length ? h('div', { class: 'stack' }, h('h2', { class: 'section-title', text: title }), of(lvl).map(finding)) : null;
+    return h('div', { class: 'stack' },
+      pageHead('Advisor', 'Looks at your whole server, notices other security tools, and tells you what to do. It only looks: nothing changes unless you press a button.',
+        h('button', { class: 'btn', type: 'button', text: 'Look again', onclick: () => redraw(true) })),
+      h('div', { class: 'banner ' + banner[0] }, icon(banner[1]), h('div', {}, h('div', { text: banner[2] }), h('div', { class: 'sub', text: banner[3] }))),
+      h('div', { class: 'kv-row' },
+        [['Server', sv.os || 'unknown'], ['Web server', (sv.web_server || 'none') + (sv.web_server_version ? ' ' + sv.web_server_version : '')],
+          ['CyberPanel', sv.cyberpanel ? 'found' : 'not found'], ['Checked', data.checked_at]].map(([k, v]) =>
+          h('div', { class: 'kv' }, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v })))),
+      section('Needs action now', 'bad'), section('Worth fixing soon', 'warn'), section('Good to know', 'info'),
+      of('ok').length ? h('section', { class: 'card' }, h('h2', { text: 'These look fine' }),
+        h('div', { class: 'stack' }, of('ok').map(f => h('div', { class: 'row ok-line' }, icon('check'), h('span', { text: f.title }))))) : null);
+  }
+
+  // ------------------------------------------------------------------ setup
+  const STEP_STATE = { done: ['Done', 'ok'], todo: ['To do', 'warn'], blocked: ['Blocked', 'bad'], skip: ['Not needed', ''] };
+  const JOB_STATE = { waiting: ['Waiting', ''], running: ['Working…', 'brand'], done: ['Done', 'ok'], failed: ['Failed', 'bad'], skipped: ['Skipped', ''] };
+
+  function jobCard(job) {
+    const done = job.status === 'done', failed = job.status === 'failed', running = job.status === 'running';
+    return h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: running ? 'Setting up…' : done ? 'Setup finished' : 'Setup stopped' }),
+        running ? h('div', { class: 'spinner small-spin', 'aria-hidden': 'true' }) : badge(done ? 'all done' : 'a step failed', done ? 'ok' : 'bad'),
+        h('span', { class: 'muted small right', text: job.finished ? 'Finished ' + job.finished : 'Started ' + job.started })),
+      h('ol', { class: 'steps' }, job.steps.map(s => {
+        const [label, kind] = JOB_STATE[s.state] || [s.state, ''];
+        return h('li', { class: 'step ' + s.state }, h('div', { class: 'step-main' }, h('strong', { text: s.title }), badge(label, kind)),
+          s.message ? h('div', { class: 'step-msg ' + (s.state === 'failed' ? 'error' : 'muted'), text: s.message }) : null);
+      })),
+      failed ? h('div', { class: 'note warn', style: 'margin:0 1.25rem 1rem', text: 'Nothing is left half-done: the step that failed undid its own changes. Fix the cause named above, then run setup again.' }) : null,
+      job.log.length ? h('details', { class: 'log-box', open: running ? true : null }, h('summary', { text: 'Technical log' }), h('pre', { class: 'log', text: job.log.join('\n') })) : null);
+  }
+
+  async function viewSetup() {
+    const holder = h('div', { class: 'stack' });
+    const runBtn = h('button', { class: 'btn primary', type: 'button', text: 'Run setup' });
+    let lastStatus = null;
+
+    async function start(keys, todo) {
+      const names = todo.filter(t => !keys || keys.includes(t.key)).map(t => t.title);
+      const content = h('div', {}, h('p', { text: 'These steps will run, one after the other:' }),
+        h('ul', { class: 'plain-list' }, names.map(n => h('li', { text: n }))),
+        h('p', { class: 'muted small', text: 'Each step undoes its own changes if something goes wrong. The web server restarts gracefully once, and your websites are checked afterwards.' }));
+      if (!await dialog({ title: 'Run setup?', content, ok: 'Run setup' })) return;
+      const r = await act('/api/setup/run', keys ? { keys } : {});
+      if (r.ok) load();
+    }
+
+    function render(d) {
+      const todo = d.plan.filter(p => p.state === 'todo');
+      const running = d.job.status === 'running';
+      runBtn.disabled = running || !todo.length;
+      runBtn.onclick = () => start(null, todo);
+      const sv = d.server;
+      const cert = sv.certificate;
+      const info = h('div', { class: 'kv-row' },
+        [['Web server', (sv.web_server || 'none found') + (sv.web_server_version ? ' ' + sv.web_server_version : '')],
+          ['Panel address', sv.panel_domain ? 'https://' + sv.panel_domain + ':' + sv.panel_port : 'not set'],
+          ['Panel certificate', !cert ? 'not set' : cert.found ? (cert.days_left === null ? 'found' : cert.days_left + ' days left') : 'not found']].map(([k, v]) =>
+          h('div', { class: 'kv' }, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }))));
+      const plan = running ? null : h('div', { class: 'stack' }, d.plan.map(p => {
+        const [label, kind] = STEP_STATE[p.state] || [p.state, ''];
+        return h('section', { class: 'card plan-step ' + p.state },
+          h('div', { class: 'row' }, h('h3', { text: p.title }), badge(label, kind),
+            p.state === 'todo' && todo.length > 1 ? h('button', { class: 'btn small right', type: 'button', text: 'Run only this', onclick: () => start([p.key], todo) }) : null),
+          h('p', { class: p.state === 'blocked' ? 'error' : 'muted', text: p.note }),
+          p.will_do.length ? h('details', {}, h('summary', { text: 'What it will do' }), h('ul', { class: 'plain-list' }, p.will_do.map(w => h('li', { text: w })))) : null);
+      }));
+      const nothing = !running && !todo.length && d.plan.every(p => p.state !== 'blocked')
+        ? h('div', { class: 'banner ok' }, icon('check'), h('div', {}, h('div', { text: 'Everything is set up' }), h('div', { class: 'sub', text: 'Nothing is left to do on this server.' }))) : null;
+      // replaceChildren would print the word "null" for an empty slot, so only real elements are passed
+      holder.replaceChildren(...[info, nothing, d.job.status !== 'idle' ? jobCard(d.job) : null, plan].filter(Boolean));
+    }
+
+    async function load() {
+      const { data } = await api('/api/setup');
+      if (!data.plan) return;
+      render(data);
+      clearInterval(S.pollTimer);
+      if (data.job.status === 'running') {
+        S.pollTimer = setInterval(() => { if (S.view !== 'setup') clearInterval(S.pollTimer); else load(); }, 1500);
+      } else if (lastStatus === 'running') {
+        toast(data.job.status === 'done' ? 'Setup finished.' : 'Setup stopped. See the details on this page.', data.job.status === 'done' ? 'ok' : 'bad');
+      }
+      lastStatus = data.job.status;
+    }
+    await load();
+    return h('div', { class: 'stack' },
+      pageHead('Setup', 'Installs and checks every protection. You can see the plan first; nothing changes until you press the button. Safe to run again at any time.', runBtn),
+      holder);
+  }
+
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, blocked: viewBlocked, access: viewAccess, firewall: viewFirewall, updates: viewUpdates, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
@@ -487,10 +749,12 @@
 
   async function boot() {
     const { data } = await api('/api/me');
+    S.twofa = !!data.twofa;
     if (data.authenticated) { S.me = data; S.csrf = data.csrf; } else { S.me = null; }
     draw();
   }
 
-  window.addEventListener('hashchange', () => draw());
+  window.addEventListener('hashchange', () => { S.more = false; draw(); });
+  matchMedia('(max-width:900px)').addEventListener('change', () => { S.more = false; if (S.me) draw(); });
   boot();
 })();
