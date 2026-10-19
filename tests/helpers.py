@@ -40,6 +40,10 @@ class EnvTestCase(unittest.TestCase):
         patcher = mock.patch.object(util, "run", self.fake)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # the "please run as root" checks are skipped for a pretend server (tests do not run as root on GitHub)
+        env = mock.patch.dict(os.environ, {"CPSEC_ROOT": self.root})
+        env.start()
+        self.addCleanup(env.stop)
 
     # small conveniences
     def write(self, path, text):
