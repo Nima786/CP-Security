@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 
 from .cli import main
 
