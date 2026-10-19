@@ -163,6 +163,54 @@ def _commit(new_items, done_message):
     return Result(True, msg)
 
 
+# ----------------------------------------------------------------------------- the "never block" list
+def _commit_never(new_items, done_message):
+    old = read_list(config.P.never_list)
+    write_list(config.P.never_list, new_items, NEVER_HEADER)
+    res = apply()
+    if not res.ok:
+        write_list(config.P.never_list, old, NEVER_HEADER)
+        apply()
+        return Result(False, "Nothing was changed. " + res.message, res.code)
+    return Result(True, done_message)
+
+
+def add_never(address, label=""):
+    addr, err = check_address(address)
+    if err:
+        return Result(False, err, "invalid")
+    items = read_list(config.P.never_list)
+    if any(a == addr for a, _ in items):
+        return Result(False, "%s is already on the list." % addr, "exists")
+    label = " ".join((label or "").replace("|", " ").split())[:60] or "Added from the panel"
+    return _commit_never(items + [(addr, label)], "%s will never be blocked automatically." % addr)
+
+
+def add_never_many(addresses, label):
+    """Add known-good ranges in one go (for example Cloudflare's). Wide ranges are allowed here on purpose."""
+    items = read_list(config.P.never_list)
+    have = set(a for a, _ in items)
+    fresh = []
+    for a in addresses:
+        try:
+            net = str(ipaddress.ip_network(a, strict=False))
+        except ValueError:
+            continue
+        if net not in have:
+            fresh.append((net, label))
+            have.add(net)
+    if not fresh:
+        return Result(False, "They are all on the list already.", "exists")
+    return _commit_never(items + fresh, "%d %s addresses were added to the never-block list." % (len(fresh), label))
+
+
+def remove_never(address):
+    items = read_list(config.P.never_list)
+    if not any(a == address for a, _ in items):
+        return Result(False, "%s is not on the list." % address, "missing")
+    return _commit_never([x for x in items if x[0] != address], "%s can be blocked again if it misbehaves." % address)
+
+
 # ----------------------------------------------------------------------------- the actions
 def add_admin(address, label=""):
     addr, err = check_address(address)

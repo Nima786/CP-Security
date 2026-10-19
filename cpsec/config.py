@@ -36,8 +36,15 @@ class Paths:
         self.lsws_root = j("/usr/local/lsws")
         self.lsws_conf = self.lsws_root + "/conf"
         self.lsws_ctl = self.lsws_root + "/bin/lswsctrl"
-        self.modsec_conf = self.lsws_conf + "/modsec.conf"
+        self.lsws_bin_ols = self.lsws_root + "/bin/openlitespeed"     # only OpenLiteSpeed has this
+        self.lsws_bin_ent = self.lsws_root + "/bin/litespeed"         # LiteSpeed Enterprise program
+        self.lsws_xml = self.lsws_conf + "/httpd_config.xml"          # LiteSpeed Enterprise settings
+        self.lsws_version = self.lsws_root + "/VERSION"
+        self.ols_conf = self.lsws_conf + "/httpd_config.conf"         # OpenLiteSpeed settings
+        self.ols_module = self.lsws_root + "/modules/mod_security.so"
+        self.modsec_conf = self.lsws_conf + "/modsec.conf"            # LiteSpeed Enterprise ModSecurity file
         self.waf_dir = self.lsws_conf + "/cps-waf"
+        self.waf_main = self.waf_dir + "/main.conf"
         self.waf_rules = self.waf_dir + "/rules.conf"
         self.waf_block = self.waf_dir + "/block-rule.conf"
         self.waf_before = self.waf_dir + "/exceptions-before.conf"
@@ -52,6 +59,15 @@ class Paths:
         # the panel
         self.panel_log = j("/var/log/cp-security/panel.log")
         self.install_dir = j("/opt/cp-security")
+        self.systemd_dir = j("/etc/systemd/system")
+        self.logrotate_dir = j("/etc/logrotate.d")
+        self.letsencrypt_live = j("/etc/letsencrypt/live")
+        self.sshd_config = j("/etc/ssh/sshd_config")
+        self.sshd_config_d = j("/etc/ssh/sshd_config.d")
+
+    def at(self, path):
+        """A system path as it is on this machine (tests move everything into a temporary folder)."""
+        return self.root + path
 
 
 P = Paths(os.environ.get("CPSEC_ROOT", ""))

@@ -1,13 +1,13 @@
-﻿import datetime
+import datetime
 import os
 
 from cpsec import access, config, util, waf
 from tests.helpers import EnvTestCase
 
 MODSEC = """<IfModule security2_module>
-SecRuleEngine On
-SecAuditEngine On
-Include /usr/local/lsws/conf/cps-waf/rules.conf
+SecAuditLogParts AFH
+# CP-Security web firewall (keeps its own settings in one separate file)
+Include /usr/local/lsws/conf/cps-waf/main.conf
 </IfModule>
 """
 
@@ -55,7 +55,9 @@ class FirewallEnv(EnvTestCase):
     def setUp(self):
         super().setUp()
         p = config.P
+        self.write(p.lsws_xml, "<config/>")
         self.write(p.modsec_conf, MODSEC)
+        self.write(p.waf_main, waf.render_main("On"))
         self.write(p.waf_rules, "# rules\n")
         self.write(p.waf_block, waf.WATCH_BLOCK)
         self.write(p.waf_before, "")
@@ -68,7 +70,7 @@ class Modes(FirewallEnv):
     def test_state_is_read_from_the_files(self):
         self.assertEqual(waf.mode(), "watch")
         self.assertEqual(waf.state(), (True, waf.MODE_TEXT["watch"]))
-        self.write(config.P.modsec_conf, MODSEC.replace("SecRuleEngine On", "SecRuleEngine Off"))
+        self.write(config.P.waf_main, waf.render_main("Off"))
         self.assertEqual(waf.mode(), "off")
         self.assertEqual(waf.state()[0], None)
 
@@ -94,7 +96,7 @@ class Modes(FirewallEnv):
 
     def test_off_turns_the_engine_off(self):
         waf.set_mode("off")
-        self.assertIn("SecRuleEngine Off", self.read(config.P.modsec_conf))
+        self.assertIn("SecRuleEngine Off", self.read(config.P.waf_main))
         self.assertEqual(waf.mode(), "off")
 
     def test_a_site_that_breaks_undoes_the_change(self):
