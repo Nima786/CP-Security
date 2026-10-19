@@ -6,7 +6,7 @@ set -eu
 [ -d /opt/cp-security/cpsec ] || { echo "CP-Security does not seem to be installed here (no /opt/cp-security)." >&2; exit 1; }
 cd /opt/cp-security
 PY="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3)"
-if [ ! -t 0 ] && [ -r /dev/tty ]; then
+if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
     exec "$PY" -m cpsec uninstall "$@" </dev/tty
 fi
 exec "$PY" -m cpsec uninstall "$@"

@@ -60,7 +60,7 @@ fi
 
 # --- questions need a keyboard, even when this script was piped in from curl ------------------
 cd "$SRC"
-if [ ! -t 0 ] && [ -r /dev/tty ]; then
+if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
     exec "$PY" -m cpsec install "$@" </dev/tty
 fi
 exec "$PY" -m cpsec install "$@"
