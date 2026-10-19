@@ -24,6 +24,8 @@ class Paths:
         self.tls_dir = self.conf_dir + "/tls"
         self.nft_file = self.conf_dir + "/admin-lock.nft"
         self.updates_cache = self.conf_dir + "/updates-cache.json"
+        self.blocker_settings = self.conf_dir + "/blocker.json"
+        self.legacy_conf_dir = j("/etc/pb-security")
 
         # the attack blocker (fail2ban)
         self.f2b_log = j("/var/log/fail2ban.log")
@@ -68,6 +70,10 @@ class Paths:
     def at(self, path):
         """A system path as it is on this machine (tests move everything into a temporary folder)."""
         return self.root + path
+
+    def is_debian(self):
+        """Ubuntu / Debian (apt) as opposed to AlmaLinux / Rocky / CentOS (dnf)."""
+        return os.path.exists(self.at("/etc/debian_version"))
 
 
 P = Paths(os.environ.get("CPSEC_ROOT", ""))

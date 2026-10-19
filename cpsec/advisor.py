@@ -54,7 +54,7 @@ def _os_name():
 
 
 def _debian_family():
-    return os.path.exists(config.P.at("/etc/debian_version"))
+    return config.P.is_debian()
 
 
 # ----------------------------------------------------------------------------- the web server and its firewall

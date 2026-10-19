@@ -3,6 +3,7 @@ import datetime
 import glob
 import gzip
 import ipaddress
+import os
 import re
 import shutil
 
@@ -209,3 +210,170 @@ def recent_summary():
         tops[ip] = tops.get(ip, 0) + 1
     return {"day": pack(ev1), "week": pack(ev7),
             "top_addresses": [{"ip": ip, "times": n} for ip, n in sorted(tops.items(), key=lambda kv: -kv[1])[:5]]}
+
+
+# ----------------------------------------------------------------------------- the protections we install
+# What each protection watches, in the blocker's own language. Written to /etc/fail2ban when set up.
+FILTER_WP_LOGIN = """# Written by CP-Security.
+# Reads the tidy file made by the cps-wplogin-feed helper: one line per failed WordPress login.
+[Definition]
+failregex = WPLOGIN <HOST> \\S+ \\d{3}\\s*$
+datepattern = ^%%Y-%%m-%%d %%H:%%M:%%S
+ignoreregex =
+"""
+FILTER_MAIL_AUTH = """# Written by CP-Security.
+# Wrong passwords on the mail server (Postfix).
+[INCLUDES]
+before = common.conf
+
+[Definition]
+_daemon = postfix(-\\w+)?/(?:submission/|smtps/)?smtp[ds]
+failregex = ^%(__prefix_line)swarning: [-._\\w]+\\[<HOST>\\]: SASL (?:LOGIN|PLAIN|(?:CRAM|DIGEST)-MD5) authentication failed(?::.*)?\\s*$
+ignoreregex =
+"""
+FILTER_PANEL = """# Written by CP-Security.
+# Wrong passwords on the CP-Security panel itself.
+[Definition]
+failregex = LOGIN_FAILED ip=<HOST> user=\\S*\\s*$
+datepattern = ^%%Y-%%m-%%d %%H:%%M:%%S
+ignoreregex =
+"""
+OWN_FILTERS = {"cps-wp-login": FILTER_WP_LOGIN, "cps-mail-auth": FILTER_MAIL_AUTH, "cps-panel": FILTER_PANEL}
+
+TUNABLE = ("sshd", "cps-wp-login", "cps-mail-auth", "dovecot", "pure-ftpd", "cps-panel")
+DEFAULT_TUNING = {name: {"maxretry": 5, "findtime": 600, "bantime": 3600} for name in TUNABLE}
+LIMITS = {"maxretry": (2, 50), "findtime": (60, 86400), "bantime": (60, 2592000)}
+PORTS = {
+    "cps-wp-login": "http,https",
+    "cps-mail-auth": "25,465,587,143,993,110,995",
+}
+BAN_ACTIONS = "banaction = nftables-multiport\nbanaction_allports = nftables-allports\n"
+
+LOGROTATE = """# Written by CP-Security.
+%s {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+"""
+
+
+def tuning():
+    """The numbers for every protection: defaults, then whatever the owner changed."""
+    stored = util.read_json(config.P.blocker_settings, {})
+    out = {}
+    for name in TUNABLE:
+        merged = dict(DEFAULT_TUNING[name])
+        for key, value in (stored.get(name) or {}).items():
+            if key in merged and isinstance(value, int) and not isinstance(value, bool):
+                merged[key] = value
+        out[name] = merged
+    return out
+
+
+def _first_existing(paths):
+    for p in paths:
+        if os.path.exists(config.P.at(p)):
+            return config.P.at(p)
+    return None
+
+
+def log_for(jail):
+    """The log file a protection reads, or None when this server has no such log (the protection is skipped)."""
+    if jail == "cps-wp-login":
+        return config.P.wplogin_log
+    if jail == "cps-panel":
+        return config.P.panel_log
+    if jail in ("cps-mail-auth", "dovecot"):
+        return _first_existing(("/var/log/mail.log", "/var/log/maillog"))
+    if jail == "pure-ftpd":
+        return _first_existing(("/var/log/pure-ftpd/pure-ftpd.log", "/var/log/syslog", "/var/log/messages"))
+    return None                                             # sshd: the blocker already knows where to look
+
+
+def render_jails():
+    """The text of our jail file and the list of protections left out because their log does not exist."""
+    numbers = tuning()
+    out = ["# Written by CP-Security. Change the numbers in the panel (Settings), not here.\n"]
+    skipped = []
+    for name in TUNABLE:
+        logpath = log_for(name)
+        if name != "sshd" and not logpath:
+            skipped.append(name)
+            out.append("\n# %s: left out, this server has no log file for it\n" % name)
+            continue
+        n = numbers[name]
+        lines = ["", "[%s]" % name, "enabled = true"]
+        if name in OWN_FILTERS:
+            lines.append("filter = %s" % name)
+        if logpath:
+            lines.append("logpath = %s" % logpath)
+        if name in PORTS:
+            lines.append("port = %s" % PORTS[name])
+        lines += ["maxretry = %d" % n["maxretry"], "findtime = %d" % n["findtime"], "bantime = %d" % n["bantime"]]
+        out.append("\n".join(lines) + "\n" + BAN_ACTIONS)
+    return "".join(out), skipped
+
+
+def write_config():
+    """Write our filters, our jail file and the log-rotation rules; check them; reload the blocker.
+
+    Everything is put back if the blocker does not accept it. Returns a Result.
+    """
+    p = config.P
+    own = [p.f2b_filter_dir + "/%s.conf" % n for n in OWN_FILTERS] + [p.f2b_jails]
+    snap = util.snapshot(own)
+    for name, text in OWN_FILTERS.items():
+        util.atomic_write(p.f2b_filter_dir + "/%s.conf" % name, text)
+    jails_text, skipped = render_jails()
+    util.atomic_write(p.f2b_jails, jails_text)
+    for path in (p.wplogin_log, p.panel_log):                # a missing log would stop the whole blocker from starting
+        if not os.path.exists(path):
+            util.atomic_write(path, "", 0o640)
+    rc, out = util.run(["fail2ban-client", "-t"], timeout=90)
+    if rc != 0:
+        util.restore(snap)
+        return Result(False, "The blocker rejected the new settings, so nothing was changed: " + out.strip()[-200:],
+                      "f2b_rejected")
+    if jails() is not None:
+        rc, out = util.run(["fail2ban-client", "reload"], timeout=90)
+        if rc != 0:
+            util.restore(snap)
+            util.run(["fail2ban-client", "reload"], timeout=90)
+            return Result(False, "The blocker would not reload, so the old settings were put back.", "reload_failed")
+    note = (" Left out because this server has no log for them: %s." % ", ".join(skipped)) if skipped else ""
+    return Result(True, "The blocker settings are in place." + note)
+
+
+def set_tuning(changes):
+    """changes: {jail: {maxretry, findtime, bantime}} - any of the three. Checked, saved, applied."""
+    stored = util.read_json(config.P.blocker_settings, {})
+    for jail, values in (changes or {}).items():
+        if jail not in TUNABLE or not isinstance(values, dict):
+            return Result(False, "Unknown protection: %s" % jail, "invalid")
+        entry = dict(stored.get(jail) or {})
+        for key, value in values.items():
+            if key not in LIMITS:
+                return Result(False, "Unknown setting: %s" % key, "invalid")
+            if isinstance(value, bool) or not isinstance(value, int):
+                return Result(False, "%s must be a whole number." % key, "invalid")
+            low, high = LIMITS[key]
+            if not low <= value <= high:
+                return Result(False, "%s must be between %d and %d." % (key, low, high), "invalid")
+            entry[key] = value
+        stored[jail] = entry
+    old = util.read_json(config.P.blocker_settings, None)
+    util.write_json(config.P.blocker_settings, stored)
+    res = write_config()
+    if not res.ok:
+        if old is None:
+            try:
+                os.remove(config.P.blocker_settings)
+            except OSError:
+                pass
+        else:
+            util.write_json(config.P.blocker_settings, old)
+    return res if not res.ok else Result(True, "Saved. The blocker uses the new numbers now.")
