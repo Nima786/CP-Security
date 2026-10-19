@@ -20,14 +20,11 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from . import access, blocker, config, netinfo, provision, settings, sites, tls, util, waf, webserver
+from . import (access, blocker, config, headers, netinfo, ports, provision, settings, sites, tls, util, waf,
+                webserver)
 from .util import Result
 
 LEVEL_ORDER = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
-
-# databases and caches that must never listen on the open internet
-RISKY_PORTS = {3306: "MySQL/MariaDB", 5432: "PostgreSQL", 6379: "Redis", 11211: "Memcached",
-               27017: "MongoDB", 9200: "Elasticsearch"}
 
 
 def F(fid, level, title, detail="", advice="", fix=None):
@@ -251,24 +248,26 @@ def check_os_updates():
 
 
 def check_open_services():
-    rc, out = util.run(["ss", "-H", "-ltn"])
-    if rc != 0:
+    """Open doors that should not be open. The 'Open ports' page lists all of them and lets the owner decide."""
+    found = ports.rows()
+    if found is None:
         return []
-    open_ones = {}
-    for line in out.splitlines():
-        m = re.search(r"(\S+):(\d+)\s+\S+\s*$", line.strip())
-        if not m:
-            continue
-        host, port = m.group(1), int(m.group(2))
-        if port in RISKY_PORTS and not (host.startswith("127.") or host in ("[::1]", "::1")):
-            open_ones[port] = RISKY_PORTS[port]
-    if not open_ones:
-        return []
-    names = ", ".join("%s (port %d)" % (n, p) for p, n in sorted(open_ones.items()))
-    return [F("open_services", "bad", "A database or cache is open to the internet",
-              names + " is listening on all addresses.",
-              "Make it listen on 127.0.0.1 only, or close the port in the firewall. Websites on this server "
-              "do not need it open from outside.")]
+    out = []
+    risky = [r for r in found if r["level"] == "bad"]
+    if risky:
+        names = ", ".join("%s (port %d)" % (r["name"], r["port"]) for r in risky)
+        out.append(F("open_services", "bad", "A database or internal tool is open to the internet",
+                     names + " is listening on all addresses.",
+                     "Lock it on the Open ports page, or make the program listen on 127.0.0.1 only. Websites on "
+                     "this server do not need it open from outside.", _page("ports", "Open the Open ports page")))
+    odd = [r for r in found if r["level"] == "warn"]
+    if odd:
+        names = ", ".join("%s (port %d)" % (r["name"], r["port"]) for r in odd)
+        out.append(F("open_ports", "warn", "%d open port%s to look at" % (len(odd), "" if len(odd) == 1 else "s"),
+                     names + " can be reached by anybody on the internet.",
+                     "Lock what you do not use from outside, or press 'I know about this' on the ones you do.",
+                     _page("ports", "Open the Open ports page")))
+    return out
 
 
 def check_general_firewall():
@@ -305,6 +304,11 @@ def check_lock():
         return [F("lock", "bad", "The admin pages are NOT locked",
                   "CyberPanel, the LiteSpeed admin and the web terminal can be opened by anybody who finds them.",
                   "Re-apply the lock with the button.", _action("reapply_lock", "Lock the admin pages now"))]
+    if not settings.lock_ports():
+        return [F("lock", "info", "No port is locked",
+                  "You chose to leave the admin pages open to everybody, so the lock has nothing to protect.",
+                  "Their passwords still apply. You can lock them again on the Open ports page.",
+                  _page("ports", "Open the Open ports page"))]
     n = len(access.list_admin())
     out = [F("lock", "ok", "The admin pages are locked to %d trusted address%s" % (n, "" if n == 1 else "es"), "", "")]
     if n == 1:
@@ -409,9 +413,23 @@ def check_baseline():
               "Save it once everything looks right.", _page("settings", "Open Settings"))]
 
 
+def check_security_headers():
+    if not headers.supported():
+        return []
+    s = headers.summary()
+    if not s["total"]:
+        return []
+    if s["needs"]:
+        return [F("headers", "info", "%d of %d websites do not send the security headers you chose yet" % (s["needs"], s["total"]),
+                  "Security headers protect your visitors, for example against a page being hidden inside another website.",
+                  "Open the Security headers page, read what each one does and apply the ones you want.",
+                  _page("headers", "Open Security headers"))]
+    return [F("headers", "ok", "The websites send the security headers you chose", "", "")]
+
+
 CHECKS = (check_webserver, check_modsecurity, check_waf_age, check_imunify, check_csf, check_blocker_and_others,
           check_lock, check_general_firewall, check_ssh, check_os_updates, check_open_services, check_cloudflare,
-          check_panel_access, check_certificate, check_wordpress_updates, check_baseline)
+          check_panel_access, check_certificate, check_wordpress_updates, check_security_headers, check_baseline)
 
 
 def run():

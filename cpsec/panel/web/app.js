@@ -35,6 +35,8 @@
     alert: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
     info: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
     advisor: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z',
+    ports: 'M7.77 6.76L6.23 5.48.82 12l5.41 6.52 1.54-1.28L3.42 12l4.35-5.24zM7 13h2v-2H7v2zm10-2h-2v2h2v-2zm-6 2h2v-2h-2v2zm6.77-7.52l-1.54 1.28L20.58 12l-4.35 5.24 1.54 1.28L23.18 12l-5.41-6.52z',
+    headers: 'M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 14v2h8v-2h-8zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z',
     setup: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
     more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
   };
@@ -159,6 +161,8 @@
     ['advisor', 'Advisor', 'advisor', 'Advisor', 'Protection', true],
     ['blocked', 'Blocked', 'blocked', 'Blocked', 'Protection', true],
     ['access', 'Admin access', 'access', 'Access', 'Protection', false],
+    ['ports', 'Open ports', 'ports', 'Ports', 'Protection', false],
+    ['headers', 'Security headers', 'headers', 'Headers', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
     ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
@@ -438,6 +442,217 @@
               await act('/api/access/never/remove', { address: n.address }, 'Updating the blocker…'); redraw(); } } })))),
           'Nothing is on this list.'),
         h('div', { class: 'card-foot' }, neverForm)));
+  }
+
+  // ------------------------------------------------------------------ open ports
+  const PORT_STATUS = {
+    open: ['Open to everyone', 'warn'], locked: ['Trusted addresses only', 'ok'], closed: ['This server only', 'ok'],
+    private: ['Private network only', 'ok'], idle: ['Nothing running', ''],
+  };
+
+  async function viewPorts() {
+    const { data } = await api('/api/ports');
+    const head = pageHead('Open ports', 'The doors this server has open, who can reach each one, and which ones you keep for trusted addresses only.');
+    if (!data.supported) return h('div', { class: 'stack' }, head, card(null, empty(data.message)));
+
+    const lockPort = async r => {
+      const lines = [h('p', { text: r.warn || ('Only your trusted addresses (' + data.trusted + ') will be able to reach ' + r.name + '. Everybody else is refused.') })];
+      if (!data.client_ip_trusted) lines.push(h('p', { class: 'error', text: 'Your own address (' + data.client_ip + ') is not on the trusted list, so you would lose access to it too. Add it on the Admin access page first.' }));
+      if (!await dialog({ title: 'Lock port ' + r.port + '?', content: h('div', {}, lines), ok: 'Lock it', danger: !!r.warn })) return;
+      await act('/api/ports/lock', { port: r.port, confirmed: true }, 'Updating the lock…');
+      redraw();
+    };
+    const openPort = async r => {
+      if (!await confirmBox('Open port ' + r.port + ' to everybody?', r.open_warning || ('Port ' + r.port + ' will be open to everybody again.'), 'Open it', true)) return;
+      await act('/api/ports/unlock', { port: r.port, confirmed: true }, 'Updating the lock…');
+      redraw();
+    };
+    const accept = async (r, on) => { await act('/api/ports/accept', { port: r.port, accepted: on }); redraw(); };
+
+    const small = isSmall();
+    const rows = data.ports.map(r => {
+      const [label, kind] = PORT_STATUS[r.status] || [r.status, ''];
+      const badKind = r.level === 'bad' ? 'bad' : (r.level === 'warn' ? 'warn' : kind);
+      const buttons = [];
+      if (r.can_lock) buttons.push(h('button', { class: 'btn small' + (r.level === 'bad' || r.level === 'warn' ? ' primary' : ''), type: 'button', text: 'Lock it', onclick: () => lockPort(r) }));
+      if (r.can_open) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Open it up', onclick: () => openPort(r) }));
+      if (r.ignored) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Warn me again', onclick: () => accept(r, false) }));
+      else if (r.can_accept) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'I know about this', onclick: () => accept(r, true) }));
+      // on a phone there is no room for a third column: the buttons go under the status instead
+      const actions = buttons.length ? h('div', { class: 'row', style: small ? 'margin-top:.6rem' : 'justify-content:flex-end' }, buttons) : null;
+      return h('tr', {},
+        h('td', {},
+          h('div', {}, h('span', { class: 'mono', text: String(r.port) }), ' ', h('strong', { text: r.name })),
+          h('div', { class: 'muted small', text: r.what }),
+          h('div', { class: 'small' }, badge(r.kind_name), r.programs.length ? h('span', { class: 'muted', text: '  ' + r.programs.join(', ') }) : null)),
+        h('td', {},
+          badge(label, badKind),
+          h('div', { class: 'muted small', text: r.status_text }),
+          r.advice ? h('div', { class: 'small', style: 'margin-top:.25rem', text: r.advice }) : null,
+          !r.can_lock && r.status === 'open' && r.cannot_lock_reason ? h('div', { class: 'muted small', text: r.cannot_lock_reason }) : null,
+          small ? actions : null),
+        small ? null : h('td', { class: 'actions' }, actions));
+    });
+
+    const attention = data.counts.bad + data.counts.warn;
+    const summary = card(null,
+      h('div', { class: 'row' },
+        attention ? badge(attention + ' to look at', data.counts.bad ? 'bad' : 'warn') : badge('nothing to worry about', 'ok'),
+        h('span', { class: 'muted', text: 'Lock a door and only your ' + data.trusted + ' trusted address' + (data.trusted === 1 ? '' : 'es') + ' can use it.' })),
+      h('p', { class: 'muted small', style: 'margin-top:.75rem', text: 'This shows what the programs on the server allow. A firewall outside the server, such as your hosting company\u2019s, may close more.'
+        + (data.firewall ? ' A firewall (' + data.firewall + ') is also switched on here.' : '') + ' Only TCP doors are listed. Nothing is locked unless you press the button, and you can undo every choice.' }));
+
+    return h('div', { class: 'stack' }, head, summary,
+      h('section', { class: 'card flush' }, table(small ? ['Door', 'Who can reach it'] : ['Door', 'Who can reach it', ''], rows, 'No open ports were found.')));
+  }
+
+  // ------------------------------------------------------------------ security headers
+  const SITE_BADGE = { applied: 'ok', outdated: 'warn', none: 'warn', own: '', off: '', excluded: '', error: 'bad' };
+  const SOURCE_TEXT = { ours: 'sent by CP-Security', site: 'set by the website itself', other: 'sent by something else (a plugin, Cloudflare…)', none: 'not sent' };
+
+  // a checkbox with its text beside it (the text wraps inside its own column)
+  const tick = (id, input, text) => h('label', { class: 'tick', for: id }, input, h('span', { text }));
+
+  async function viewHeaders() {
+    const { data } = await api('/api/headers');
+    const head = pageHead('Security headers', 'Small instructions every website sends to every visitor\u2019s browser. They protect your visitors and your site\u2019s reputation. They do not stop a break-in.');
+    if (!data.supported) {
+      return h('div', { class: 'stack' }, head, card('Not available on this web server yet',
+        h('p', { text: 'This server runs ' + data.web_server + ', which ignores header lines in .htaccess. CP-Security will support it in a later version. Nothing has been changed.' })));
+    }
+    if (data.checking) {                          // the websites are being asked in the background: look again soon
+      const id = S.drawId;
+      setTimeout(() => { if (id === S.drawId && S.view === 'headers') softRedraw(); }, 2500);
+    }
+    const d = data.defaults;
+    const small = isSmall();
+
+    // ---- the choices
+    const boxes = {};
+    const choiceRow = it => {
+      if (it.id === 'hsts') {
+        const sel = h('select', { id: 'hd-hsts', 'aria-label': it.title }, data.hsts_choices.map(c => h('option', { value: String(c.seconds), text: c.seconds ? 'For ' + c.text : 'Off' })));
+        sel.value = String(d.hsts);
+        const sub = h('input', { type: 'checkbox', id: 'hd-hsts_subdomains', checked: !!d.hsts_subdomains });
+        boxes.hsts = sel; boxes.hsts_subdomains = sub;
+        return h('div', { class: 'check' }, h('div', { class: 'grow' },
+          h('div', { class: 't', text: it.title }), h('div', { class: 'd', text: it.what }),
+          h('div', { class: 'risk', text: 'Careful: ' + it.risk }),
+          h('div', { class: 'row', style: 'margin-top:.5rem' }, sel,
+            tick('hd-hsts_subdomains', sub, 'Also cover sub-domains (only if every sub-domain works with https://)'))));
+      }
+      const box = h('input', { type: 'checkbox', id: 'hd-' + it.id, checked: !!d[it.id] });
+      boxes[it.id] = box;
+      return h('label', { class: 'check', for: 'hd-' + it.id }, box, h('div', { class: 'grow' },
+        h('div', { class: 't', text: it.title }), h('div', { class: 'd', text: it.what }),
+        it.risk ? h('div', { class: 'risk', text: 'Careful: ' + it.risk }) : null,
+        h('div', { class: 'muted small mono', text: it.name })));
+    };
+    const collect = () => {
+      const out = {};
+      for (const it of data.items) out[it.id] = it.id === 'hsts' ? parseInt(boxes.hsts.value, 10) : boxes[it.id].checked;
+      out.hsts_subdomains = boxes.hsts_subdomains.checked;
+      return out;
+    };
+    const saveChoices = async () => (await act('/api/headers/defaults', { changes: collect() }, 'Saving…')).ok;
+    const ownNames = s => data.items.filter(i => s.own_headers.includes(i.name.toLowerCase())).map(i => i.name);
+
+    const applyAll = async () => {
+      const clash = data.sites.some(s => ownNames(s).length);
+      const takeBox = h('input', { type: 'checkbox', id: 'ap-take' });
+      const content = h('div', {},
+        h('p', { text: 'The headers you chose will be added to your websites. Afterwards each website is asked for its home page. If one stops answering, or the web server ignores the headers, that website gets its file back exactly as it was. Websites you left alone are skipped.' }),
+        clash ? tick('ap-take', takeBox, 'Also take over the headers some websites set themselves. Their own lines are switched off, not deleted, and come back if you remove CP-Security\u2019s.') : null);
+      if (!await dialog({ title: 'Apply to all websites?', content, ok: 'Save and apply' })) return;
+      if (!await saveChoices()) return;
+      await act('/api/headers/apply', { all: true, take_over: takeBox.checked }, 'Applying… this can take a minute');
+      redraw();
+    };
+    const removeAll = async () => {
+      if (!await confirmBox('Remove from all websites?', 'CP-Security\u2019s lines are taken out of every website\u2019s .htaccess. Headers a website set itself stay. Lines that CP-Security switched off are switched back on.', 'Remove', true)) return;
+      await act('/api/headers/remove', { all: true }, 'Removing…');
+      redraw();
+    };
+
+    const customize = async s => {
+      const o = s.overrides || {};
+      const tri = (key, label) => {
+        const sel = h('select', { id: 'cs-' + key },
+          h('option', { value: '', text: 'Follow the default (' + (d[key] ? 'on' : 'off') + ')' }), h('option', { value: 'on', text: 'Always on' }), h('option', { value: 'off', text: 'Always off' }));
+        sel.value = o[key] === true ? 'on' : (o[key] === false ? 'off' : '');
+        return [h('div', { class: 'field' }, h('label', { for: 'cs-' + key, text: label }), sel), sel];
+      };
+      const sels = {}, fields = [];
+      for (const it of data.items) {
+        if (it.id === 'hsts') {
+          const sel = h('select', { id: 'cs-hsts' }, h('option', { value: '', text: 'Follow the default (' + (d.hsts ? 'for ' + (data.hsts_choices.find(c => c.seconds === d.hsts) || {}).text : 'off') + ')' }),
+            data.hsts_choices.map(c => h('option', { value: String(c.seconds), text: c.seconds ? 'For ' + c.text : 'Off' })));
+          sel.value = o.hsts === undefined ? '' : String(o.hsts);
+          sels.hsts = sel;
+          fields.push(h('div', { class: 'field' }, h('label', { for: 'cs-hsts', text: it.title }), sel));
+          const [f2, s2] = tri('hsts_subdomains', 'Secure address: also cover sub-domains');
+          sels.hsts_subdomains = s2; fields.push(f2);
+        } else {
+          const [f, sel] = tri(it.id, it.title);
+          sels[it.id] = sel; fields.push(f);
+        }
+      }
+      const excl = h('input', { type: 'checkbox', id: 'cs-exclude', checked: !!o.exclude });
+      const clash = ownNames(s);
+      const takeBox = h('input', { type: 'checkbox', id: 'cs-take' });
+      const content = h('div', {}, h('p', { class: 'muted', text: s.domain }), fields,
+        clash.length ? tick('cs-take', takeBox, 'Take over what this website sets itself (' + clash.join(', ') + '). Its lines are switched off, not deleted.') : null,
+        tick('cs-exclude', excl, 'Leave this website alone. CP-Security will never change its .htaccess, and removes its own lines now.'));
+      if (!await dialog({ title: 'Choices for one website', content, ok: 'Save and apply' })) return;
+      const changes = {};
+      for (const [key, sel] of Object.entries(sels)) {
+        changes[key] = sel.value === '' ? null : (key === 'hsts' ? parseInt(sel.value, 10) : sel.value === 'on');
+      }
+      changes.exclude = excl.checked ? true : null;
+      await act('/api/headers/site', { domain: s.domain, changes, apply: true, take_over: takeBox.checked }, 'Applying…');
+      redraw();
+    };
+
+    // ---- the websites
+    const chip = (it, c) => {
+      const sent = c.seen === null ? (c.source === 'ours' || c.source === 'site') : c.seen;
+      const own = c.source === 'site' ? ' (own)' : (c.source === 'other' ? ' (other)' : '');
+      return h('span', { class: 'badge ' + (sent ? 'ok' : ''), title: it.short + ': ' + SOURCE_TEXT[c.source] + (c.seen === null ? ' (not checked yet)' : ''),
+        text: (sent ? '\u2713 ' : '\u2013 ') + it.short + own });
+    };
+    const rows = data.sites.map(s => {
+      const buttons = [];
+      if (s.needs_apply) buttons.push(h('button', { class: 'btn small primary', type: 'button', text: 'Apply', onclick: async () => {
+        await act('/api/headers/apply', { domains: [s.domain] }, 'Applying…'); redraw(); } }));
+      buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Choices…', onclick: () => customize(s) }));
+      if (s.has_block) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Remove', onclick: async () => {
+        if (!await confirmBox('Remove from ' + s.domain + '?', 'CP-Security\u2019s lines are taken out of this website\u2019s .htaccess. Headers the website set itself stay.', 'Remove', true)) return;
+        await act('/api/headers/remove', { domains: [s.domain] }, 'Removing…'); redraw(); } }));
+      const actions = h('div', { class: 'row', style: small ? 'margin-top:.6rem' : 'justify-content:flex-end' }, buttons);
+      return h('tr', {},
+        h('td', {}, h('strong', { text: s.domain }), h('div', {}, badge(s.status_text, SITE_BADGE[s.status])),
+          s.error ? h('div', { class: 'small error', text: s.error }) : null,
+          s.taken ? h('div', { class: 'muted small', text: s.taken + ' of the website\u2019s own line' + (s.taken === 1 ? ' is' : 's are') + ' switched off by CP-Security' }) : null,
+          small ? actions : null),
+        h('td', {}, h('div', { class: 'chips' }, data.items.map((it, i) => chip(it, s.chips[i])))),
+        small ? null : h('td', { class: 'actions' }, actions));
+    });
+
+    const need = data.sites.filter(s => s.needs_apply).length;
+    return h('div', { class: 'stack' }, head,
+      h('section', { class: 'card' }, h('h2', { text: 'What your websites should send' }),
+        h('p', { class: 'muted', text: 'The safe ones are on. The two that can cause trouble are off until you choose them.' }),
+        data.items.map(choiceRow),
+        h('div', { class: 'row', style: 'margin-top:1rem' },
+          h('button', { class: 'btn primary', type: 'button', text: 'Save and apply to all websites…', onclick: applyAll }),
+          h('button', { class: 'btn', type: 'button', text: 'Only save', onclick: async () => { if (await saveChoices()) redraw(); } }),
+          h('button', { class: 'btn danger', type: 'button', text: 'Remove from all websites…', onclick: removeAll }))),
+      h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: 'Your websites' }), need ? badge(need + ' to apply', 'warn') : badge('all up to date', 'ok'),
+          h('span', { class: 'muted small right', text: data.checking ? 'Asking the websites…' : (data.checked_at ? 'Last asked at ' + data.checked_at : 'Not asked yet') }),
+          h('button', { class: 'btn small', type: 'button', text: 'Ask the websites now', onclick: async () => { await act('/api/headers/check', {}, 'Asking the websites…'); redraw(); } })),
+        table(small ? ['Website', 'What it sends'] : ['Website', 'What it sends', ''], rows, 'No websites were found.'),
+        h('div', { class: 'card-foot muted small', text: '\u2713 is sent, \u2013 is not. \u201c(own)\u201d means the website sets it itself; \u201c(other)\u201d means something else sends it, such as a plugin or Cloudflare. The result is what the web server really answers.' })));
   }
 
   // ------------------------------------------------------------------ web firewall
@@ -835,7 +1050,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];

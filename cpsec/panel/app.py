@@ -89,6 +89,27 @@ def _text(value, limit=200):
     return value.strip()[:limit] if isinstance(value, str) else ""
 
 
+def _website_list(body):
+    """None for 'all websites', or the list of names in the request."""
+    if body.get("all") is True:
+        return None
+    names = body.get("domains")
+    if not isinstance(names, list) or not names or len(names) > 300 or not all(isinstance(n, str) for n in names):
+        raise BadRequest("Choose which websites.")
+    return [n.strip()[:100] for n in names]
+
+
+def _port_number(value):
+    """A port number from a request; 0 when it is not one (the engine then answers 'not a port')."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
 class App:
     def __init__(self, engine, sessions=None, limiter=None, secure_cookies=True, allowed_hosts=None,
                  sleep=time.sleep, clock=time.time):
@@ -120,6 +141,16 @@ class App:
             ("POST", "/api/access/home"): (self.api_access_home, True),
             ("POST", "/api/access/never/add"): (self.api_never_add, True),
             ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/headers"): (self.api_headers, True),
+            ("POST", "/api/headers/defaults"): (self.api_headers_defaults, True),
+            ("POST", "/api/headers/check"): (self.api_headers_check, True),
+            ("POST", "/api/headers/apply"): (self.api_headers_apply, True),
+            ("POST", "/api/headers/remove"): (self.api_headers_remove, True),
+            ("POST", "/api/headers/site"): (self.api_headers_site, True),
+            ("GET", "/api/ports"): (self.api_ports, True),
+            ("POST", "/api/ports/lock"): (self.api_ports_lock, True),
+            ("POST", "/api/ports/unlock"): (self.api_ports_unlock, True),
+            ("POST", "/api/ports/accept"): (self.api_ports_accept, True),
             ("GET", "/api/advisor"): (self.api_advisor, True),
             ("POST", "/api/advisor/fix"): (self.api_advisor_fix, True),
             ("GET", "/api/setup"): (self.api_setup, True),
@@ -340,6 +371,71 @@ class App:
         address = _text(req.json().get("address"), 64)
         res = self.engine.never_remove(address)
         activity.write("NEVER_BLOCK_REMOVE", ip=req.ip, target=address, ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ open ports
+    def api_ports(self, req, session):
+        data = self.engine.ports_state()
+        data["client_ip"] = req.ip
+        data["client_ip_trusted"] = any(t["address"] == req.ip for t in self.engine.access_state()["trusted"])
+        return _json(200, data)
+
+    def api_ports_lock(self, req, session):
+        b = req.json()
+        port = _port_number(b.get("port"))
+        res = self.engine.ports_lock(port, req.ip, bool(b.get("confirmed")))
+        activity.write("PORT_LOCK", ip=req.ip, target=str(port), ok=res.ok)
+        return _result(res)
+
+    def api_ports_unlock(self, req, session):
+        b = req.json()
+        port = _port_number(b.get("port"))
+        res = self.engine.ports_unlock(port, bool(b.get("confirmed")))
+        activity.write("PORT_UNLOCK", ip=req.ip, target=str(port), ok=res.ok)
+        return _result(res)
+
+    def api_ports_accept(self, req, session):
+        b = req.json()
+        port = _port_number(b.get("port"))
+        res = self.engine.ports_accept(port, bool(b.get("accepted", True)))
+        activity.write("PORT_ACCEPT" if b.get("accepted", True) else "PORT_UNACCEPT", ip=req.ip, target=str(port), ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ security headers
+    def api_headers(self, req, session):
+        return _json(200, self.engine.headers_state())
+
+    def api_headers_defaults(self, req, session):
+        changes = req.json().get("changes")
+        res = self.engine.headers_defaults(changes if isinstance(changes, dict) else {})
+        activity.write("HEADERS_DEFAULTS", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    def api_headers_check(self, req, session):
+        return _result(self.engine.headers_check())
+
+    def api_headers_apply(self, req, session):
+        b = req.json()
+        res = self.engine.headers_apply(_website_list(b), bool(b.get("take_over")))
+        activity.write("HEADERS_APPLY", ip=req.ip, target="all" if b.get("all") else _text(",".join(_website_list(b) or []), 120),
+                       ok=res.ok)
+        return _result(res)
+
+    def api_headers_remove(self, req, session):
+        b = req.json()
+        res = self.engine.headers_remove(_website_list(b))
+        activity.write("HEADERS_REMOVE", ip=req.ip, target="all" if b.get("all") else _text(",".join(_website_list(b) or []), 120),
+                       ok=res.ok)
+        return _result(res)
+
+    def api_headers_site(self, req, session):
+        b = req.json()
+        domain = _text(b.get("domain"), 100)
+        changes = b.get("changes")
+        if not isinstance(changes, dict) or not all(v is None or isinstance(v, (bool, int)) for v in changes.values()):
+            raise BadRequest("Those choices could not be read.")
+        res = self.engine.headers_site(domain, changes, bool(b.get("apply")), bool(b.get("take_over")))
+        activity.write("HEADERS_SITE", ip=req.ip, target=domain, ok=res.ok)
         return _result(res)
 
     # ------------------------------------------------------------------ advisor and setup

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+* **http:// now goes to https://.** Typing the panel's address without the "s" used to show an error. The panel now
+  answers a plain-http request on its port with a permanent redirect to the same page over https. The destination is
+  always the panel's own configured name, never taken from the request.
+* **Security headers** (new page, LiteSpeed Enterprise). Small instructions every website sends to every visitor's browser.
+  Seven are offered, each explained: file types, framing, referrer, browser features, hiding the technology label (on by
+  default), the secure-address rule (HSTS, off, with a chosen time) and the gentle content rule (off). Choices apply to all
+  websites or are changed for one. A block of lines is written at the top of the website's `.htaccess`; nothing else is touched.
+  A header the website already sets itself is left alone unless you choose "take over" (those lines are switched off, not
+  deleted, and come back when CP-Security's block is removed). After a change the website is asked for its home page; if it
+  stops answering, or the web server ignores the headers, the file is put back exactly. LiteSpeed notices a changed
+  `.htaccess` only every few seconds, so the check asks again for up to 15 seconds. A copy of every file is kept.
+  The file work is done as the website's own user, never as root, so a link planted in a hacked site's folder
+  cannot make the panel overwrite or read a system file.
+* **Open ports** (new page). Lists every port a program is listening on, with a plain-English name and purpose,
+  who can reach it (everyone, only trusted addresses, only this server, private network) and what CP-Security
+  thinks of it. Every choice belongs to the owner: "Lock it" limits a port to the trusted addresses, "Open it up"
+  undoes it (even for CyberPanel's own pages, after a warning), "I know about this" silences the advisor for a
+  port that is meant to be open. Ports 80 and 443 can never be locked; the server login, mail, DNS and FTP ask
+  for a confirmation first; the panel's own port stays under Settings. Choices are saved and survive restarts.
+* The Advisor's old "database open to the internet" check now uses the same list, also flags unknown programs
+  that are open to everyone, and points to the Open ports page.
+
 ## 0.3.0
 * **Update from the panel.** The version number is shown at the top of every page with "up to date" or "update
   available". "Check for updates" asks GitHub; "Update now" downloads the release, checks its fingerprint, tests the new

@@ -21,6 +21,8 @@ class Paths:
         self.waf_exceptions = self.conf_dir + "/waf-exceptions.json"
         self.waf_settings = self.conf_dir + "/waf-settings.json"
         self.panel_settings = self.conf_dir + "/panel.json"
+        self.ports_settings = self.conf_dir + "/ports.json"
+        self.headers_settings = self.conf_dir + "/headers.json"
         self.tls_dir = self.conf_dir + "/tls"
         self.nft_file = self.conf_dir + "/admin-lock.nft"
         self.updates_cache = self.conf_dir + "/updates-cache.json"

@@ -10,8 +10,8 @@ import datetime
 import threading
 import time
 
-from .. import (__version__, access, advisor, blocker, config, health, provision, selfupdate, settings, sites, tls,
-                updates, util, waf, webserver)
+from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, ports, provision,
+                selfupdate, settings, sites, tls, updates, util, waf, webserver)
 from ..util import Result
 
 BUSY = Result(False, "Setup is running right now. Try again when it has finished.", "busy")
@@ -253,6 +253,74 @@ class LiveEngine:
         with self._lock:
             return access.apply()
 
+    # ------------------------------------------------------------------ open ports
+    def ports_state(self):
+        return ports.state()
+
+    def ports_lock(self, port, caller_ip, confirmed):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return ports.lock(port, caller_ip, confirmed)
+
+    def ports_unlock(self, port, confirmed):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return ports.unlock(port, confirmed)
+
+    def ports_accept(self, port, accepted):
+        with self._lock:
+            self._changed()
+            return ports.accept(port, accepted)
+
+    # ------------------------------------------------------------------ security headers
+    def headers_state(self):
+        return headers.state()
+
+    def headers_defaults(self, changes):
+        with self._lock:
+            self._changed()
+            return headers.set_defaults(changes)
+
+    def headers_check(self):
+        n = headers.check_all()
+        return Result(True, "Asked %d website%s what they send." % (n, "" if n == 1 else "s"))
+
+    def headers_apply(self, domains, take_over):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return headers.apply(domains, take_over)
+
+    def headers_remove(self, domains):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return headers.remove(domains)
+
+    def headers_site(self, domain, changes, apply_now, take_over=False):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            res = headers.set_site(domain, changes)
+            if not res.ok:
+                return res
+            if changes.get("exclude") is True:
+                done = headers.remove([domain])
+                return Result(done.ok, "%s is left alone from now on. %s" % (domain, done.message.split(": ", 1)[-1]), done.code)
+            return headers.apply([domain], take_over) if apply_now else res
+
     # ------------------------------------------------------------------ web firewall
     def waf_state(self):
         m = waf.mode()
@@ -364,6 +432,15 @@ class DemoEngine:
                         {"address": "45.60.0.20", "label": "This server", "is_home": False},
                         {"address": "45.60.0.30", "label": "Added by owner", "is_home": False}]
         self.never = [{"address": "104.16.0.0/13", "label": "Cloudflare"}, {"address": "172.64.0.0/13", "label": "Cloudflare"}]
+        self.port_choices = {"locked": [], "opened": [], "accepted": []}
+        self.h_cfg = {"defaults": dict(headers.DEFAULTS), "sites": {}}
+        self.h_sites = {d: {"own": list(own), "taken": [], "block": "", "error": err} for d, own, err in (
+            ("blog.example.com", [], ""), ("example.org", [], ""), ("old.example.com", [],
+             "The CP-Security lines in this website's .htaccess are damaged (a start or end line is missing or repeated). "
+             "Nothing was changed. Fix or delete them by hand first."),
+            ("shop.example.com", ["x-frame-options", "strict-transport-security"], ""),
+            ("staging.example.com", [], ""))}
+        self.h_sites["blog.example.com"]["block"] = self._demo_block("blog.example.com")
         self.mode = "watch"
         self.threshold = 5
         self.exceptions = []
@@ -584,6 +661,142 @@ class DemoEngine:
 
     def access_reapply(self):
         return Result(True, "ok")
+
+    # ------------------------------------------------------------------ open ports (made-up server)
+    DEMO_LISTENING = [
+        (21, "everyone", ["pure-ftpd"]), (22, "everyone", ["sshd"]), (25, "everyone", ["master"]),
+        (53, "everyone", ["pdns_server"]), (80, "everyone", ["litespeed"]), (443, "everyone", ["litespeed"]),
+        (465, "everyone", ["master"]), (587, "everyone", ["master"]), (993, "everyone", ["dovecot"]),
+        (3306, "server", ["mariadbd"]), (5000, "everyone", ["node"]), (6379, "everyone", ["redis-server"]),
+        (7080, "everyone", ["litespeed"]), (8081, "everyone", ["pdns_server"]), (8090, "everyone", ["lscpd"]),
+        (8888, "everyone", ["python3"]),
+    ]
+
+    def _demo_lock_set(self):
+        s = set(p for p in config.ADMIN_PORTS if p not in self.port_choices["opened"])
+        return s | set(self.port_choices["locked"])
+
+    def ports_state(self):
+        locked_set = self._demo_lock_set()
+        found = [ports._row(p, reach, progs, self.port_choices, locked_set) for p, reach, progs in self.DEMO_LISTENING]
+        found.sort(key=lambda r: (ports.LEVEL_ORDER[r["level"]], r["port"]))
+        counts = {lvl: sum(1 for r in found if r["level"] == lvl) for lvl in ports.LEVEL_ORDER}
+        return {"supported": True, "ports": found, "counts": counts, "firewall": "", "trusted": len(self.trusted), "message": ""}
+
+    def ports_lock(self, port, caller_ip, confirmed):
+        row = next((r for r in self.ports_state()["ports"] if r["port"] == port), None)
+        if row is None:
+            return Result(False, "Nothing is listening on port %s." % port, "not_listening")
+        if port in ports.PROTECTED:
+            return Result(False, row["cannot_lock_reason"], "protected")
+        if row["locked_by"]:
+            return Result(False, "Port %d is already locked." % port, "already")
+        if row["warn"] and not confirmed:
+            return Result(False, row["warn"], "needs_confirm")
+        if port in config.ADMIN_PORTS:
+            self.port_choices["opened"] = [p for p in self.port_choices["opened"] if p != port]
+        else:
+            self.port_choices["locked"] = sorted(set(self.port_choices["locked"]) | {port})
+        return Result(True, "Port %d is now locked: only your trusted addresses can reach it." % port)
+
+    def ports_unlock(self, port, confirmed):
+        if port in self.port_choices["locked"]:
+            self.port_choices["locked"] = [p for p in self.port_choices["locked"] if p != port]
+            return Result(True, "Port %d is open to everybody again." % port)
+        if port in config.ADMIN_PORTS and port not in self.port_choices["opened"]:
+            if not confirmed:
+                return Result(False, "This admin page will be reachable by anybody on the internet.", "needs_confirm")
+            self.port_choices["opened"] = sorted(set(self.port_choices["opened"]) | {port})
+            return Result(True, "Port %d is open to everybody. The lock will not close it again until you lock it." % port)
+        return Result(False, "Port %d is not locked." % port, "not_locked")
+
+    def ports_accept(self, port, accepted):
+        have = set(self.port_choices["accepted"])
+        (have.add if accepted else have.discard)(port)
+        self.port_choices["accepted"] = sorted(have)
+        return Result(True, "Noted. CP-Security will stop warning you about port %d." % port if accepted
+                      else "CP-Security will mention port %d again if it stays open." % port)
+
+    # ------------------------------------------------------------------ security headers (made-up websites)
+    def _demo_block(self, domain):
+        eff = headers.effective(self.h_cfg, domain)
+        return headers.build_block(eff, set(self.h_sites[domain]["own"]))[0] or ""
+
+    def headers_state(self):
+        rows = []
+        for domain, s in self.h_sites.items():
+            block = s["block"]
+            info = {"exists": True, "has_block": bool(block), "block": block, "damaged": False,
+                    "site_names": sorted(s["own"]), "taken": len(s["taken"]), "error": s["error"]}
+            sent = (htfile.header_names(block) - {"x-powered-by"}) | set(s["own"])
+            if "x-powered-by" not in htfile.header_names(block):
+                sent.add("x-powered-by")
+            live = {"status": "200", "headers": {n: "x" for n in sent}, "at": time.time()}
+            rows.append(headers.build_row(domain, self.h_cfg, info, live))
+        return headers.assemble(self.h_cfg, rows, False, time.time())
+
+    def headers_defaults(self, changes):
+        clean, err = headers._clean(changes, False)
+        if err:
+            return Result(False, err, "invalid")
+        self.h_cfg["defaults"].update(clean)
+        return Result(True, "Saved. Press Apply to put the new choices on your websites.")
+
+    def headers_check(self):
+        return Result(True, "Asked %d websites what they send." % len(self.h_sites))
+
+    def _demo_change(self, domains, take_over, remove):
+        targets = [d for d in self.h_sites if domains is None or d in domains]
+        if domains is not None and len(targets) != len(set(domains)):
+            return Result(False, "Not a website on this server.", "unknown_site")
+        done = failed = 0
+        for d in targets:
+            s = self.h_sites[d]
+            if s["error"]:
+                failed += 1
+                continue
+            if remove:
+                s["block"] = ""
+                s["own"] = sorted(set(s["own"]) | set(s["taken"]))
+                s["taken"] = []
+            elif not headers.effective(self.h_cfg, d).get("exclude"):
+                if take_over:
+                    wanted = {i["name"].lower() for i in headers.ITEMS if headers.enabled(i["id"], headers.effective(self.h_cfg, d))}
+                    mine = sorted(set(s["own"]) & wanted)
+                    s["taken"] = sorted(set(s["taken"]) | set(mine))
+                    s["own"] = [n for n in s["own"] if n not in mine]
+                s["block"] = self._demo_block(d)
+            done += 1
+        if len(targets) == 1:
+            return Result(not failed, "%s: %s" % (targets[0], "Done." if not failed else "The CP-Security lines in this website's .htaccess are damaged. Nothing was changed."),
+                          "" if not failed else "failed")
+        text = "%s %d website%s." % ("Removed from" if remove else "Applied to", done, "" if done == 1 else "s")
+        return Result(not failed, text + (" %d could not be changed." % failed if failed else ""), "failed" if failed else "")
+
+    def headers_apply(self, domains, take_over):
+        return self._demo_change(domains, take_over, False)
+
+    def headers_remove(self, domains):
+        return self._demo_change(domains, False, True)
+
+    def headers_site(self, domain, changes, apply_now, take_over=False):
+        if domain not in self.h_sites:
+            return Result(False, "That website is not on this server.", "unknown_site")
+        wanted = {k: v for k, v in changes.items() if v is not None}
+        clean, err = headers._clean(wanted, True)
+        if err:
+            return Result(False, err, "invalid")
+        mine = self.h_cfg["sites"].setdefault(domain, {})
+        for k, v in changes.items():
+            if v is None:
+                mine.pop(k, None)
+        mine.update(clean)
+        if not mine:
+            self.h_cfg["sites"].pop(domain, None)
+        if changes.get("exclude") is True:
+            self._demo_change([domain], False, True)
+            return Result(True, "%s is left alone from now on." % domain)
+        return self._demo_change([domain], take_over, False) if apply_now else Result(True, "Saved for %s." % domain)
 
     def waf_state(self):
         return {"installed": True, "mode": self.mode, "text": waf.MODE_TEXT[self.mode], "threshold": self.threshold,

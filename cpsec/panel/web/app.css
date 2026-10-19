@@ -242,3 +242,20 @@ summary { cursor: pointer; font-weight: 600; color: var(--brand); }
   .table-wrap th { font-size: .7rem; letter-spacing: .02em; }
   .versionbar .right { margin-left: 0; }
 }
+
+/* ---------- security headers: choices and per-website chips ---------- */
+.check { display: flex; gap: .75rem; align-items: flex-start; padding: .8rem 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.check:last-of-type { border-bottom: 0; }
+.check > input[type=checkbox] { width: 20px; height: 20px; margin-top: .2rem; flex: none; accent-color: var(--brand); }
+.check .grow { flex: 1 1 auto; min-width: 0; }
+.check .t { font-weight: 600; }
+.check .d { color: var(--muted); font-size: .92rem; }
+.check .risk { color: var(--warn); font-size: .86rem; margin-top: .15rem; }
+.check select { padding: .45rem .6rem; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); min-height: 38px; }
+.tick { display: flex; gap: .6rem; align-items: flex-start; font-size: .92rem; margin-top: .75rem; cursor: pointer; }
+.tick > input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); flex: none; margin-top: .1rem; }
+.tick > span { flex: 1 1 0; min-width: 0; }
+/* a tall dialog keeps its buttons in view and scrolls its body */
+.dialog[open] { display: flex; flex-direction: column; max-height: calc(100vh - 2rem); }
+.dialog[open] .body { overflow-y: auto; flex: 1 1 auto; }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; }

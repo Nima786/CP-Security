@@ -83,7 +83,7 @@ def build_nft(items, ports):
         if addr not in target:
             target.append(addr)
     plist = ", ".join(str(p) for p in ports)
-    return "\n".join([
+    head = [
         "#!/usr/sbin/nft -f",
         "# Written by CP-Security. Change it with the menu or the panel, not by hand.",
         "add table inet %s" % TABLE,
@@ -91,13 +91,14 @@ def build_nft(items, ports):
         "table inet %s {" % TABLE,
         "    chain input {",
         "        type filter hook input priority -1; policy accept;",
+    ]
+    # an empty port set is not valid nft; when the owner left every port open the chain simply has no rules
+    rules = [] if not ports else [
         "        tcp dport { %s } ip saddr { %s } accept" % (plist, ", ".join(v4)),
         "        tcp dport { %s } ip6 saddr { %s } accept" % (plist, ", ".join(v6)),
         "        tcp dport { %s } drop" % plist,
-        "    }",
-        "}",
-        "",
-    ])
+    ]
+    return "\n".join(head + rules + ["    }", "}", ""])
 
 
 def _write_f2b_ignore(admin, never):
@@ -142,8 +143,10 @@ def apply():
 
 
 def lock_is_live():
+    """The lock table is loaded. (If the owner opened every port there is no rule to load, and an empty
+    table counts as live: it is exactly what was asked for.)"""
     rc, out = util.run(["nft", "list", "table", "inet", TABLE])
-    return rc == 0 and "drop" in out
+    return rc == 0 and ("drop" in out or not settings.lock_ports())
 
 
 def _commit(new_items, done_message):

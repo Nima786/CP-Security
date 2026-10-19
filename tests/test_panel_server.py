@@ -109,6 +109,60 @@ class RealStart(EnvTestCase):
                 pass
         self.assertEqual(self.call("GET", "/api/me")[0].status, 200, "still serving afterwards")
 
+    def plain(self, raw):
+        """Send raw bytes over a plain (not TLS) connection and return everything the panel answers."""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+            s.sendall(raw)
+            out = b""
+            try:
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    out += chunk
+            except OSError:
+                pass
+        return out.decode("latin-1")
+
+    def test_typing_http_sends_the_browser_on_to_https(self):
+        self.start()
+        out = self.plain(b"GET /api/me?x=1 HTTP/1.1\r\nHost: sec.example.com:%d\r\n\r\n" % self.port)
+        self.assertTrue(out.startswith("HTTP/1.1 301 "), out)
+        self.assertIn("Location: https://sec.example.com:%d/api/me?x=1\r\n" % self.port, out)
+        self.assertIn("X-Content-Type-Options: nosniff", out)
+
+    def test_the_redirect_never_points_at_a_host_the_request_made_up(self):
+        self.start()
+        out = self.plain(b"GET / HTTP/1.1\r\nHost: evil.example.net\r\n\r\n")
+        self.assertIn("Location: https://sec.example.com:%d/\r\n" % self.port, out)
+        self.assertNotIn("evil", out)
+        out = self.plain(b"GET http://evil.example.net/x HTTP/1.1\r\nHost: sec.example.com\r\n\r\n")
+        self.assertIn("Location: https://sec.example.com:%d/\r\n" % self.port, out)
+
+    def test_other_methods_get_a_redirect_that_keeps_the_method_and_head_has_no_body(self):
+        self.start()
+        out = self.plain(b"POST /api/login HTTP/1.1\r\nHost: sec.example.com\r\nContent-Length: 0\r\n\r\n")
+        self.assertTrue(out.startswith("HTTP/1.1 308 "), out)
+        out = self.plain(b"HEAD / HTTP/1.1\r\nHost: sec.example.com\r\n\r\n")
+        self.assertTrue(out.startswith("HTTP/1.1 301 "), out)
+        self.assertTrue(out.endswith("\r\n\r\n"), "a HEAD answer has no body")
+
+    def test_nonsense_on_the_port_gets_a_short_refusal_and_https_keeps_working(self):
+        self.start()
+        out = self.plain(b"\x00\x01\x02 garbage\r\n\r\n")
+        self.assertTrue(out.startswith("HTTP/1.1 301 ") or out.startswith("HTTP/1.1 308 ") or out == "", out)
+        self.assertEqual(self.call("GET", "/api/me")[0].status, 200)
+
+    def test_the_redirect_address_is_built_only_from_trusted_names(self):
+        from cpsec.panel.server import https_location
+        ok = {"sec.example.com"}
+        self.assertEqual(https_location("sec.example.com", "/a b\r\nX: y", ok, 8091), "https://sec.example.com:8091/abX:y")
+        self.assertNotIn("\r", https_location("sec.example.com", "/a\r\nSet-Cookie: x=1", ok, 8091))
+        self.assertNotIn("\n", https_location("sec.example.com", "/a\r\nSet-Cookie: x=1", ok, 8091))
+        self.assertEqual(https_location("Sec.Example.com:8091", "/", ok, 443), "https://sec.example.com/")
+        self.assertEqual(https_location("x", "//evil.example.net/", ok, 8091), "https://sec.example.com:8091//evil.example.net/")
+        self.assertIsNone(https_location("sec.example.com", "/", set(), 8091))
+
     def test_without_a_certificate_the_failure_is_a_clear_message_not_a_crash_in_our_code(self):
         shutil.rmtree("%s/%s" % (config.P.letsencrypt_live, DOMAIN))
         with self.assertRaises((OSError, FileNotFoundError)):

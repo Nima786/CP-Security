@@ -422,6 +422,86 @@ class AdvisorAndSetup(PanelCase):
         self.assertTrue(self.request("POST", "/api/access/never/remove", {"address": "45.60.0.77"})[1]["ok"])
         self.assertEqual(self.request("POST", "/api/access/never/remove", {"address": "45.60.0.77"})[0].status, 400)
 
+    def test_the_open_ports_page_lists_doors_and_every_choice_works(self):
+        _, data = self.request("GET", "/api/ports")
+        self.assertTrue(data["supported"])
+        self.assertTrue(data["client_ip_trusted"])
+        rows = {r["port"]: r for r in data["ports"]}
+        self.assertEqual(rows[6379]["level"], "bad")
+        self.assertEqual(rows[5000]["level"], "warn")
+        self.assertEqual(rows[8090]["locked_by"], "default")
+
+        resp, res = self.request("POST", "/api/ports/lock", {"port": 5000, "confirmed": True})
+        self.assertTrue(res["ok"], res)
+        rows = {r["port"]: r for r in self.request("GET", "/api/ports")[1]["ports"]}
+        self.assertEqual((rows[5000]["status"], rows[5000]["locked_by"]), ("locked", "you"))
+        resp, res = self.request("POST", "/api/ports/lock", {"port": 80, "confirmed": True})
+        self.assertEqual((resp.status, res["code"]), (400, "protected"))
+        resp, res = self.request("POST", "/api/ports/lock", {"port": 22})
+        self.assertEqual((resp.status, res["code"]), (409, "needs_confirm"))
+
+        self.assertTrue(self.request("POST", "/api/ports/unlock", {"port": 5000})[1]["ok"])
+        resp, res = self.request("POST", "/api/ports/unlock", {"port": 8090})
+        self.assertEqual((resp.status, res["code"]), (409, "needs_confirm"))
+        self.assertTrue(self.request("POST", "/api/ports/unlock", {"port": 8090, "confirmed": True})[1]["ok"])
+
+        self.assertTrue(self.request("POST", "/api/ports/accept", {"port": 6379})[1]["ok"])
+        rows = {r["port"]: r for r in self.request("GET", "/api/ports")[1]["ports"]}
+        self.assertEqual((rows[6379]["level"], rows[6379]["ignored"]), ("info", True))
+        self.assertTrue(self.request("POST", "/api/ports/accept", {"port": 6379, "accepted": False})[1]["ok"])
+
+    def test_the_security_headers_page_and_every_choice_work(self):
+        _, data = self.request("GET", "/api/headers")
+        self.assertTrue(data["supported"])
+        rows = {r["domain"]: r for r in data["sites"]}
+        self.assertEqual(rows["blog.example.com"]["status"], "applied")
+        self.assertEqual(rows["shop.example.com"]["status"], "none")
+        self.assertEqual(rows["old.example.com"]["status"], "error")
+        self.assertEqual({i["id"] for i in data["items"] if data["defaults"].get(i["id"])},
+                         {"nosniff", "frame", "referrer", "permissions", "hide_powered"})
+
+        self.assertTrue(self.request("POST", "/api/headers/defaults", {"changes": {"hsts": 604800}})[1]["ok"])
+        self.assertEqual(self.request("GET", "/api/headers")[1]["defaults"]["hsts"], 604800)
+        resp, res = self.request("POST", "/api/headers/defaults", {"changes": {"hsts": 7}})
+        self.assertEqual((resp.status, res["code"]), (400, "invalid"))
+
+        resp, res = self.request("POST", "/api/headers/apply", {"domains": ["shop.example.com"]})
+        self.assertTrue(res["ok"], res)
+        rows = {r["domain"]: r for r in self.request("GET", "/api/headers")[1]["sites"]}
+        self.assertEqual(rows["shop.example.com"]["status"], "applied")
+        self.assertEqual(rows["blog.example.com"]["status"], "outdated", "the new HSTS choice reaches it only when applied")
+
+        resp, res = self.request("POST", "/api/headers/site", {"domain": "shop.example.com", "changes": {"frame": False}, "apply": True})
+        self.assertTrue(res["ok"], res)
+        resp, res = self.request("POST", "/api/headers/site", {"domain": "shop.example.com", "changes": {"exclude": True}})
+        self.assertIn("left alone", res["message"])
+        resp, res = self.request("POST", "/api/headers/remove", {"all": True})
+        self.assertFalse(res["ok"])                              # the demo's damaged website cannot be changed
+        self.assertIn("1 could not be changed", res["message"])
+        self.assertTrue(self.request("POST", "/api/headers/check", {})[1]["ok"])
+
+    def test_the_security_headers_routes_refuse_nonsense_and_are_logged(self):
+        for path, body in (("/api/headers/apply", {}), ("/api/headers/apply", {"domains": []}),
+                           ("/api/headers/apply", {"domains": "shop.example.com"}), ("/api/headers/remove", {"domains": [5]}),
+                           ("/api/headers/site", {"domain": "shop.example.com", "changes": "x"}),
+                           ("/api/headers/site", {"domain": "shop.example.com", "changes": {"frame": "yes"}})):
+            resp, res = self.request("POST", path, body)
+            self.assertEqual(resp.status, 400, (path, body))
+        resp, res = self.request("POST", "/api/headers/apply", {"domains": ["nobody.example.com"]})
+        self.assertEqual((resp.status, res["code"]), (400, "unknown_site"))
+        self.request("POST", "/api/headers/apply", {"all": True})
+        _, log = self.request("GET", "/api/activity")
+        self.assertTrue(any(e["event"] == "HEADERS_APPLY" for e in log["events"]))
+
+    def test_the_open_ports_routes_refuse_nonsense_and_are_logged(self):
+        for body in ({}, {"port": "abc"}, {"port": True}, {"port": -1}, {"port": 99999}):
+            resp, res = self.request("POST", "/api/ports/lock", body)
+            self.assertEqual(resp.status, 400, body)
+            self.assertFalse(res["ok"])
+        self.request("POST", "/api/ports/lock", {"port": 5000, "confirmed": True})
+        _, log = self.request("GET", "/api/activity")
+        self.assertTrue(any(e["event"] == "PORT_LOCK" for e in log["events"]))
+
     def test_the_firewall_self_test_and_the_saved_baseline(self):
         self.assertTrue(self.request("POST", "/api/firewall/selftest", {})[1]["ok"])
         self.assertTrue(self.request("POST", "/api/settings/baseline", {})[1]["ok"])
@@ -435,7 +515,9 @@ class AdvisorAndSetup(PanelCase):
     def test_new_changes_still_need_the_secret_token(self):
         self.csrf = ""
         for path in ("/api/advisor/fix", "/api/setup/run", "/api/settings/blocker", "/api/access/never/add",
-                     "/api/firewall/selftest", "/api/settings/baseline"):
+                     "/api/firewall/selftest", "/api/settings/baseline", "/api/ports/lock", "/api/ports/unlock",
+                     "/api/ports/accept", "/api/headers/defaults", "/api/headers/check", "/api/headers/apply",
+                     "/api/headers/remove", "/api/headers/site"):
             self.assertEqual(self.request("POST", path, {})[0].status, 403, path)
 
 
@@ -453,7 +535,8 @@ class LiveDataRoutes(PanelCase):
         self.login()
 
     def test_every_page_answers_without_an_internal_error(self):
-        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/firewall", "/api/updates",
+        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/firewall",
+                 "/api/updates",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:

@@ -52,10 +52,40 @@ def save_user(user):
         util.write_json(config.P.panel_settings, stored, mode=0o600)
 
 
+def valid_port(p):
+    return isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535
+
+
+def port_choices():
+    """What the owner decided on the "Open ports" page, as three sorted lists of port numbers:
+
+    locked    extra ports that only trusted addresses may reach
+    opened    admin pages (CyberPanel, ...) that the owner chose to leave open to everybody
+    accepted  open ports the owner knows about, so the advisor stops mentioning them
+    """
+    stored = util.read_json(config.P.ports_settings, {})
+    out = {}
+    for key in ("locked", "opened", "accepted"):
+        values = stored.get(key, []) if isinstance(stored, dict) else []
+        out[key] = sorted(set(p for p in values if valid_port(p))) if isinstance(values, list) else []
+    return out
+
+
+def save_port_choices(choices):
+    clean = {key: sorted(set(p for p in choices.get(key, []) if valid_port(p)))
+             for key in ("locked", "opened", "accepted")}
+    util.write_json(config.P.ports_settings, clean, mode=0o600)
+
+
 def lock_ports():
-    """The ports the admin lock covers: the three admin pages, plus the panel if it is trusted-only."""
-    ports = list(config.ADMIN_PORTS)
+    """The ports the admin lock covers: the three admin pages (unless the owner opened one), the panel
+    if it is trusted-only, and any port the owner added on the "Open ports" page."""
+    choices = port_choices()
+    ports = [p for p in config.ADMIN_PORTS if p not in choices["opened"]]
     s = load()
-    if s["access"] == "trusted" and isinstance(s["port"], int) and 1 <= s["port"] <= 65535:
+    if s["access"] == "trusted" and valid_port(s["port"]) and s["port"] not in ports:
         ports.append(s["port"])
+    for p in choices["locked"]:
+        if p not in ports:
+            ports.append(p)
     return ports

@@ -46,5 +46,20 @@ printing, so a terminal menu and a browser panel can share it.
 
 ## M6 – Hardening and release 🚧
 - ✅ Release workflow: a tag like `v0.2.0` builds the files, runs the tests and publishes them with checksums; the installer uses only these
-- ⬜ Update from the panel (fetch the newest release, verify its checksum, restart)
+- ✅ Update from the panel (fetch the newest release, verify its checksum, restart, roll back if it does not start)
+- ✅ Typing `http://` for the panel redirects to `https://`
 - ⬜ Security review of the panel (headers, input validation, privilege separation)
+
+## M7 – More protection, all of it visible and switchable 🚧
+Rule for everything here: explained in plain words, shown on a page, and the owner can switch it on or off
+(for all websites or for one), because other servers have other needs.
+- ✅ Open ports: every listening port, what it is, who can reach it; lock to trusted addresses, open again, or "I know about this"
+- ✅ Security headers (LiteSpeed Enterprise): a safe set on by default, the risky ones off; per website; takes over a site's own
+  header lines only on request and gives them back on removal; checks the live answer and undoes the change if a website stops answering
+- ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)
+- ⬜ Block PHP in uploads folders and hide backups, logs and other sensitive files (per website, with a self-test)
+- ⬜ Daily scan for backdoors and changed WordPress files
+- ⬜ Known-vulnerable plugin and theme check
+- ⬜ Alerts (Telegram / email) for new backdoors, a blocker or website going down, certificate expiry
+- ⬜ Off-server backups and a freshness check
+- ⬜ Switching the web firewall from watching to blocking, with WordPress exclusion rules

@@ -100,3 +100,13 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   certificate. Renewal is CyberPanel's job; the panel notices the renewed files and reloads them without a restart.
 * **No second set of rules next to CyberPanel's.** Both would use the same rule numbers. The setup step is blocked
   (and the Advisor says why) while CyberPanel's OWASP/Comodo pack or Imunify is active.
+* **A website's files are changed as that website's user, never as root.** The folders belong to the website, and a
+  hacked site can plant a link there (for example a `.htaccess` that points at a system file). A root program that
+  follows it would overwrite or leak that file. `headers.py` therefore starts `htfile.py` as the website's own user
+  (no extra groups) for every write; the file is opened without following links, written through a randomly named
+  temporary file and renamed, and the original text comes back to the panel so a failed change can be undone.
+* **Every protection is explained, visible and switchable.** Other servers have other needs, so nothing is forced:
+  the Open ports page and the Security headers page show what each thing is, what it does, what could go wrong, and
+  let the owner switch it on or off for all websites or for one, and undo it. Risky choices start off.
+* **Security headers go into the website's `.htaccess` on LiteSpeed Enterprise** (Apache-style, as CyberPanel's
+  own vhost files are). OpenLiteSpeed ignores header lines there, so the page says so and writes nothing.

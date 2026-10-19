@@ -83,3 +83,18 @@ Things that cost hours to discover. They explain several design choices, so they
 * The web server sees Cloudflare's addresses instead of the visitor's unless it is told to read the real address
   from Cloudflare's header. The blocker would then block Cloudflare itself, which is why Cloudflare's ranges are on
   the never-block list and the Advisor offers to add them.
+## .htaccess and headers (LiteSpeed Enterprise)
+* LiteSpeed re-reads a changed `.htaccess` only about every 5 seconds (measured: 4.2 to 5.8 s on a live server). A
+  check made right after writing still sees the old file and would wrongly undo a good change. Ask again for up to
+  15 seconds, and compare the header VALUE, not just its presence (a website that already sent another value
+  would otherwise look fine).
+* `Header always set` also works on error pages and cached pages; `Header always merge` keeps a content policy the
+  website already sends; `Header always unset X-Powered-By` removes the PHP label. `env=HTTPS` restricts a header to
+  secure connections (used for HSTS).
+* OpenLiteSpeed only understands rewrite rules in `.htaccess`; header lines there are ignored.
+* The folder of a website is often owned by a shared group (`nogroup`) so the web server can read it. Run file work
+  with the user's own primary group, or new files end up in the wrong group.
+## Ports
+* `ss -ltnp` shows the program name with the port. CyberPanel's web terminal listens on 8888 (`uvicorn`), 
+  the panel itself on 8090 (`lscpd`); the LiteSpeed admin on 7080. A connection from `127.0.0.2` is a handy stand-in
+  for an outsider when proving the lock, because only `127.0.0.1` is trusted on the loopback.
