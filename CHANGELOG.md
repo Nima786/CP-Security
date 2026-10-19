@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+* **Fix:** the panel crashed on start-up (a mix-up of two names in the start-up code). Found on the first real
+  install. New tests now start the panel for real over HTTPS and call every page's data from the live engine.
+* The panel falls back to IPv4 when the server has IPv6 switched off.
+* Re-running the installer replaces the old program files and restarts the panel, so it always runs the newest version.
+* A code checker (pyflakes) now runs with the automatic tests.
+
 ## 0.2.0
 * **OpenLiteSpeed** support next to LiteSpeed Enterprise (one hook line in each server's own file; CyberPanel's
   files are otherwise untouched). Tested against pretend file trees only so far.

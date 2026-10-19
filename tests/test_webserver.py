@@ -1,6 +1,6 @@
 import os
 
-from cpsec import config, util, waf, webserver
+from cpsec import config, waf, webserver
 from tests.helpers import EnvTestCase
 
 ENTERPRISE_MODSEC = """<IfModule security2_module>

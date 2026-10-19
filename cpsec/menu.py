@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-from . import access, advisor, blocker, config, health, provision, sites, updates, waf
+from . import access, advisor, blocker, health, provision, updates, waf
 
 USE_COLOR = sys.stdout.isatty()
 

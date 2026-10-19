@@ -123,8 +123,15 @@ def _build_server(args, engine, secure):
     port = args.port or s["port"]
     if not port:
         raise SystemExit("No port is set. Run: security panel setup --domain ... --port ...")
-    tls = make_tls_context(cert, key) if secure else None
-    return PanelServer((args.host, int(port)), app, tls), (cert, key)
+    context = make_tls_context(cert, key) if secure else None
+    try:
+        server = PanelServer((args.host, int(port)), app, context)
+    except OSError:
+        # a server with IPv6 switched off cannot listen on "::": listen on every IPv4 address instead
+        if ":" not in args.host:
+            raise
+        server = PanelServer(("0.0.0.0", int(port)), app, context)
+    return server, (cert, key)
 
 
 def cmd_run(args):

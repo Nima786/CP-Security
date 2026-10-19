@@ -1,7 +1,7 @@
 import datetime
 import os
 
-from cpsec import access, config, util, waf
+from cpsec import access, config, waf
 from tests.helpers import EnvTestCase
 
 MODSEC = """<IfModule security2_module>

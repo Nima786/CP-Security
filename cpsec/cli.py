@@ -2,7 +2,7 @@
 import os
 import sys
 
-from . import __version__, access, advisor, blocker, menu, provision, sites, waf
+from . import __version__, access, blocker, menu, sites, waf
 
 USAGE = """security  -  the server security menu.
 

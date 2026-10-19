@@ -2,10 +2,9 @@ import hashlib
 import io
 import os
 import tarfile
-import time
 from unittest import mock
 
-from cpsec import access, blocker, config, provision, settings, util, waf, webserver
+from cpsec import access, config, provision, util, waf, webserver
 from cpsec.util import Result
 from tests.helpers import EnvTestCase
 

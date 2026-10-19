@@ -292,7 +292,7 @@ class Settings(PanelCase):
         self.login()
 
     def test_changing_the_password(self):
-        other = App(self.engine, allowed_hosts=[HOST], sleep=lambda s: None, clock=lambda: self.now[0],
+        _ = App(self.engine, allowed_hosts=[HOST], sleep=lambda s: None, clock=lambda: self.now[0],
                     sessions=self.app.sessions, limiter=self.app.limiter)
         resp, data = self.request("POST", "/api/settings/password", {"current": "not it at all!!", "new": "a brand new passphrase"})
         self.assertEqual(data["code"], "bad_password")
@@ -436,3 +436,41 @@ class AdvisorAndSetup(PanelCase):
         for path in ("/api/advisor/fix", "/api/setup/run", "/api/settings/blocker", "/api/access/never/add",
                      "/api/firewall/selftest", "/api/settings/baseline"):
             self.assertEqual(self.request("POST", path, {})[0].status, 403, path)
+
+
+class LiveDataRoutes(PanelCase):
+    """Every page's data, read from the real engine (not the demo one) on a pretend server.
+    A mistake that only shows with real data would otherwise first appear on a customer's server."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None,
+                       clock=lambda: self.now[0])
+        self.patch("cpsec.blocker.installed", return_value=False)
+        self.login()
+
+    def test_every_page_answers_without_an_internal_error(self):
+        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/firewall", "/api/updates",
+                 "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
+                 "/api/overview?refresh=1", "/api/advisor?refresh=1"]
+        for path in paths:
+            resp, data = self.request("GET", path)
+            from cpsec.panel import activity
+            self.assertEqual(resp.status, 200, "%s -> %s %s | log: %s" % (path, resp.status, data, activity.recent(3)))
+
+    def test_the_setup_plan_and_the_advisor_describe_a_bare_server(self):
+        _, setup = self.request("GET", "/api/setup")
+        self.assertEqual([s["key"] for s in setup["plan"]],
+                         ["migrate", "lock", "blocker", "feed", "baseline", "waf", "retire"])
+        _, advice = self.request("GET", "/api/advisor")
+        self.assertTrue(advice["findings"])
+        self.assertEqual(sum(advice["counts"].values()), len(advice["findings"]))
+
+    def test_a_change_on_a_bare_server_is_refused_politely_not_with_a_crash(self):
+        for path, body in (("/api/firewall/mode", {"mode": "watch"}), ("/api/blocked/unblock", {"ip": "45.60.0.99"}),
+                           ("/api/access/never/add", {"address": "45.60.0.98"}), ("/api/firewall/selftest", {})):
+            resp, data = self.request("POST", path, body)
+            self.assertIn(resp.status, (200, 400, 409), "%s -> %s %s" % (path, resp.status, data))
+            self.assertIn("ok", data)

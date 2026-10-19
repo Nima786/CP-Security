@@ -20,6 +20,8 @@ jobs:
         run: python -m compileall -q cpsec
       - name: Shell scripts are valid
         run: sh -n install.sh && sh -n uninstall.sh
+      - name: Code checker (finds names that are used but not defined, unused leftovers)
+        run: pip install pyflakes==3.2.0 && python -m pyflakes cpsec tests
       - name: Unit tests
         run: python -m unittest discover -s tests -t . -v
       - name: No secrets or server-specific values committed

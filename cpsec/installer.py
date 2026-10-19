@@ -282,6 +282,7 @@ def deploy_code(source_dir):
     if os.path.realpath(source_dir) == os.path.realpath(target):
         return util.Result(True, "The program is already in " + target)
     os.makedirs(target, exist_ok=True)
+    shutil.rmtree(os.path.join(target, "cpsec"), ignore_errors=True)     # no leftovers of an older version
     shutil.copytree(os.path.join(source_dir, "cpsec"), os.path.join(target, "cpsec"), dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     version = os.path.join(source_dir, "VERSION")

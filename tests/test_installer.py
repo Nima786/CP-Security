@@ -3,7 +3,7 @@ import os
 import threading
 from unittest import mock
 
-from cpsec import access, cli, config, installer, provision, settings, tls, util, webserver
+from cpsec import access, cli, config, installer, provision, settings, tls, util
 from cpsec.panel import auth
 from cpsec.panel import cli as panel_cli
 from cpsec.util import Result
@@ -255,6 +255,13 @@ class Doing(EnvTestCase):
         self.assertEqual(code, 0, "the panel is still installed so the owner can look and retry")
         self.assertIn("PROBLEM", c.text)
         self.assertIn("Setup page", c.text)
+
+    def test_a_re_run_replaces_the_old_program_files_and_restarts_the_panel(self):
+        self.write(config.P.install_dir + "/cpsec/old_module_that_no_longer_exists.py", "x")
+        installer.execute(FakeConsole(), self.cfg, self.source)
+        self.assertFalse(os.path.exists(config.P.install_dir + "/cpsec/old_module_that_no_longer_exists.py"))
+        self.assertTrue(os.path.exists(config.P.install_dir + "/cpsec/feed.py"))
+        self.assertTrue(self.fake.called("systemctl", "restart", provision.SERVICE_PANEL))
 
     def test_running_from_the_installed_place_copies_nothing(self):
         res = installer.deploy_code(config.P.install_dir)

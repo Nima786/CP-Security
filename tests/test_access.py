@@ -1,4 +1,3 @@
-import os
 
 from cpsec import access, config, settings, util
 from tests.helpers import EnvTestCase

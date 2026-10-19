@@ -2,7 +2,7 @@ import datetime
 import os
 
 from cpsec import access, advisor, config, netinfo, settings, util, waf, webserver
-from tests.helpers import EnvTestCase, FakeRun
+from tests.helpers import EnvTestCase
 
 
 def ids(findings):

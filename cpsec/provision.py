@@ -761,4 +761,5 @@ def install_panel_service():
     ok, out = enable_unit(SERVICE_PANEL)
     if not ok:
         return Result(False, "The panel service did not start: " + _tail(out), "start_failed")
+    util.run(["systemctl", "restart", SERVICE_PANEL], timeout=60)     # so a re-run always uses the newest program files
     return Result(True, "The panel is running.")
