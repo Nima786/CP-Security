@@ -20,6 +20,7 @@ import io
 import os
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
 import threading
@@ -112,7 +113,9 @@ WantedBy=multi-user.target
 
 
 def python_path():
-    return shutil.which("python3") or "/usr/bin/python3"
+    """The Python that is running us: the services must use the same one (it may be newer than the system default)."""
+    exe = os.path.realpath(sys.executable) if sys.executable else ""
+    return exe if exe and os.path.exists(exe) else (shutil.which("python3") or "/usr/bin/python3")
 
 
 def nft_path():
@@ -622,8 +625,9 @@ def plan():
 class Runner:
     """Runs steps in a background thread and lets the page ask how far it is."""
 
-    def __init__(self, steps=None, clock=time.strftime):
+    def __init__(self, steps=None, clock=time.strftime, on_log=None):
         self.steps = STEPS if steps is None else steps
+        self.on_log = on_log
         self.lock = threading.Lock()
         self.job = {"status": "idle", "steps": [], "log": [], "started": "", "finished": ""}
         self._clock = clock
@@ -654,6 +658,8 @@ class Runner:
         with self.lock:
             self.job["log"].append("%s  %s" % (self._clock("%H:%M:%S"), text))
             del self.job["log"][:-300]
+        if self.on_log:
+            self.on_log(text)
 
     def _set(self, index, state, message=""):
         with self.lock:

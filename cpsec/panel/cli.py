@@ -4,9 +4,11 @@ import getpass
 import signal
 import sys
 import tempfile
+import threading
+import time
 
-from .. import config, settings
-from . import auth
+from .. import config, settings, tls
+from . import activity, auth
 
 HELP = """security panel  -  the browser panel
 
@@ -115,8 +117,9 @@ def _build_server(args, engine, secure):
     s = settings.load()
     hosts = [h for h in [s["domain"]] + (args.allow_host or []) if h]
     app = App(engine, secure_cookies=secure, allowed_hosts=hosts)
-    cert = args.cert or config.P.tls_dir + "/fullchain.pem"
-    key = args.key or config.P.tls_dir + "/privkey.pem"
+    found = tls.find(s["domain"]) if s["domain"] else None
+    cert = args.cert or (found[0] if found else config.P.tls_dir + "/fullchain.pem")
+    key = args.key or (found[1] if found else config.P.tls_dir + "/privkey.pem")
     port = args.port or s["port"]
     if not port:
         raise SystemExit("No port is set. Run: security panel setup --domain ... --port ...")
@@ -139,6 +142,9 @@ def cmd_run(args):
 
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, reload_cert)            # sent after the certificate is renewed
+    if not args.insecure:
+        threading.Thread(target=watch_certificate, args=(server, settings.load()["domain"], cert, key),
+                         daemon=True).start()               # CyberPanel renews it quietly; we notice
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
         server.serve_forever()
@@ -147,6 +153,22 @@ def cmd_run(args):
     finally:
         server.server_close()
     return 0
+
+
+def watch_certificate(server, domain, cert, key, every=600, stop=None):
+    """Reload the certificate when it was renewed, without restarting the panel."""
+    last = tls.mtime_of(domain)
+    while not (stop and stop.is_set()):
+        time.sleep(every)
+        now = tls.mtime_of(domain)
+        if now and now != last:
+            try:
+                found = tls.find(domain)
+                server.reload_certificate(found[0] if found else cert, found[1] if found else key)
+                last = now
+                activity.write("CERTIFICATE_RELOADED", domain=domain)
+            except OSError:
+                pass
 
 
 DEMO_USER, DEMO_PASSWORD = "demo", "demo-password-123"

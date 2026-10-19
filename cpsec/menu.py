@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-from . import access, blocker, config, health, sites, updates, waf
+from . import access, advisor, blocker, config, health, provision, sites, updates, waf
 
 USE_COLOR = sys.stdout.isatty()
 
@@ -357,6 +357,50 @@ Watch only is the safe way to start: it records, but never refuses anybody.
             return
 
 
+ADVICE_TAG = {"bad": "[ !! ]", "warn": "[ !  ]", "info": "[ i  ]", "ok": "[ OK ]"}
+
+
+def show_advice():
+    """Print what the advisor found. Returns 0."""
+    report = advisor.run()
+    heading("ADVICE  -  " + report["checked_at"])
+    for f in report["findings"]:
+        color = {"bad": red, "warn": yellow, "ok": green}.get(f["level"], dim)
+        print(" %s %s" % (color(ADVICE_TAG[f["level"]]), f["title"]))
+        if f["level"] != "ok":
+            for line in (f["detail"], ("What to do: " + f["advice"]) if f["advice"] else ""):
+                if line:
+                    print("        " + line)
+    c = report["counts"]
+    print("\n %d need action, %d worth fixing, %d to know, %d fine." % (c["bad"], c["warn"], c["info"], c["ok"]))
+    return 0
+
+
+def run_setup(assume_yes=False):
+    """Show the plan, then (after a yes) set up what is missing, printing progress. Returns 0 or 1."""
+    heading("SETUP")
+    plan = provision.plan()
+    for step in plan:
+        tag = {"done": green("[ OK ]"), "todo": yellow("[ -> ]"), "blocked": red("[ !! ]")}.get(step["state"], dim("[ -- ]"))
+        print(" %s %s" % (tag, step["title"]))
+        print("        " + step["note"])
+        for line in step["will_do"]:
+            print("          - " + line)
+    todo = [s for s in plan if s["state"] == "todo"]
+    if not todo:
+        print("\n Nothing to do.")
+        return 0
+    if not assume_yes and not yes("\n Run the %d step(s) marked [ -> ]?" % len(todo)):
+        return 1
+    runner = provision.Runner(on_log=lambda line: print("   " + line))
+    runner.start(background=False)
+    job = runner.snapshot()
+    for step in job["steps"]:
+        if step["state"] == "failed":
+            print(red("\n PROBLEM: %s - %s" % (step["title"], step["message"])))
+    return 1 if job["status"] == "failed" else 0
+
+
 def main_menu():
     while True:
         heading("SERVER SECURITY MENU")
@@ -368,6 +412,8 @@ def main_menu():
         print(" 6) Web firewall (watches for hacking attempts)")
         print(" 7) Something is wrong - what do I do?")
         print(" 8) Emergency: stop all automatic blocking")
+        print(" 9) Advice - what to improve, and other security tools on this server")
+        print(" S) Setup - install or repair the protections")
         print(" 0) Exit")
         choice = ask("\nType a number and press Enter: ")
         if choice == "1":
@@ -387,5 +433,11 @@ def main_menu():
             menu_help()
         elif choice == "8":
             menu_emergency()
+        elif choice == "9":
+            show_advice()
+            pause()
+        elif choice.lower() == "s":
+            run_setup()
+            pause()
         elif choice in ("0", "q", "exit"):
             return

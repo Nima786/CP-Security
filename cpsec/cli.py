@@ -2,7 +2,7 @@
 import os
 import sys
 
-from . import __version__, access, blocker, menu, sites, waf
+from . import __version__, access, advisor, blocker, menu, provision, sites, waf
 
 USAGE = """security  -  the server security menu.
 
@@ -13,7 +13,12 @@ Quick commands:     security status            health check
                     security myip 1.2.3.4      my home internet address changed
                     security firewall watch    web firewall: off | watch | block
                     security updates           which sites have updates waiting (only looks)
+                    security advice            what to improve, and other security tools found
+                    security setup             show the plan and set up what is missing (--yes: no questions)
+                    security selftest          prove the web firewall sees attacks
                     security panel ...         the browser panel (see: security panel help)
+                    security install           install the panel (asks a few questions)
+                    security uninstall         take the panel away again (--purge: delete settings too)
 """
 
 
@@ -55,6 +60,18 @@ def main(argv=None):
     elif cmd == "baseline":
         r = sites.save_baseline()
         print("Saved how %d websites answer today (%d answering normally)." % (r["total"], r["normal"]))
+    elif cmd == "advice":
+        return menu.show_advice()
+    elif cmd == "setup":
+        return menu.run_setup(assume_yes="--yes" in args)
+    elif cmd == "selftest":
+        return _print(waf.selftest())
+    elif cmd == "install":
+        from . import installer
+        return installer.main(args[1:])
+    elif cmd == "uninstall":
+        from . import installer
+        return installer.main_uninstall(args[1:])
     elif cmd == "panel":
         from .panel import cli as panel_cli
         return panel_cli.main(args[1:])

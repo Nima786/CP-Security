@@ -47,3 +47,26 @@ Things that cost hours to discover. They explain several design choices, so they
 * CyberPanel regenerates `httpd.conf` and `modsec.conf` from its own pages. Never save the ModSecurity page there.
 * Do not run commands in parallel from the same terminal session when scripting the server – output got mixed up and
   uploads raced. Long jobs: start in the background on the server and poll.
+
+## CyberPanel and OpenLiteSpeed (from CyberPanel's own source, `plogical/modSec.py`)
+* Where each web server keeps ModSecurity settings differs: LiteSpeed Enterprise uses `conf/modsec.conf` and
+  `conf/rules.conf`; OpenLiteSpeed uses a `module mod_security { … }` block in `conf/httpd_config.conf`, rule files
+  listed with `modsecurity_rules_file`, and the module file `modules/mod_security.so` (package `ols-modsecurity`).
+* CyberPanel's ModSecurity page edits those files **by searching for text** (`modsecurity `, `SecRuleEngine `,
+  `SecAuditEngine `, …) and rewriting the matching lines. Our hook line contains none of those words on purpose, and
+  our own settings are in a separate file so a save on that page cannot change them.
+* CyberPanel's OWASP and Comodo rule packs add many `modsecurity_rules_file` lines (OLS) or a rules folder
+  (Enterprise). They use the same rule numbers as the OWASP rules we load, so both must never be active together.
+* The program decides "OpenLiteSpeed or Enterprise" by the existence of `bin/openlitespeed`. We use the same test.
+* Creating a site and its certificate from the command line: `cyberpanel createWebsite --package Default --owner admin
+  --domainName … --email … --php 8.1`, then `cyberpanel issueSSL --domainName …`. Certificates land in
+  `/etc/letsencrypt/live/<domain>/`.
+* CyberPanel's firewall page uses firewalld. An open port there is not enough for a locked port: our nftables table
+  decides who may use it, firewalld decides whether it is reachable at all. Both must allow.
+
+## Cloudflare
+* With the orange cloud on, only ports 443, 2053, 2083, 2087, 2096 and 8443 are passed through. A panel on any other
+  port is unreachable through it. "DNS only" (grey cloud) has no such limit.
+* The web server sees Cloudflare's addresses instead of the visitor's unless it is told to read the real address
+  from Cloudflare's header. The blocker would then block Cloudflare itself, which is why Cloudflare's ranges are on
+  the never-block list and the Advisor offers to add them.

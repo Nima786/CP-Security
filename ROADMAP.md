@@ -14,27 +14,37 @@ printing, so a terminal menu and a browser panel can share it.
 - ✅ Sites check with a saved baseline (new problems vs. old ones)
 - ✅ Updates waiting (read-only)
 - ✅ OWASP rule converter (the LiteSpeed engine only runs the first rule file unless the stricter levels are cut out)
-- ✅ Terminal menu (`security`) with parity to the hand-built version
-- ✅ Unit tests (116 including the panel)
+- ✅ Terminal menu (`security`)
 
 ## M2 – Browser panel ✅
-- ✅ Login: password (scrypt) + mandatory 6-digit code (TOTP, replay-proof), sessions with idle/absolute timeout, CSRF protection, per-address login lock-out
+- ✅ Login with username + password (scrypt); optional authenticator code; sessions with idle/absolute timeout, CSRF protection, per-address login lock-out
 - ✅ JSON API over the engine; strict security headers; only the panel's own address answers (host check)
-- ✅ Interface: Overview · Blocked · Admin access · Web firewall · Updates · Settings (phone bottom bar, dark mode, no inline scripts/styles)
-- ✅ "Use this as my home address" button (fixes the changing-home-IP problem in one click)
-- ✅ Demo mode with made-up data: `security panel demo` (for design work and screenshots; touches nothing on the server)
-- ✅ Checked in a real browser at desktop and phone sizes, light and dark
-- ✅ Login attempts are written in a log format the attack blocker can read (the blocker rule itself comes with M3)
+- ✅ Demo mode with made-up data: `security panel demo`
 
-## M3 – Installer 🚧 (next)
-- ⬜ `install.sh`: asks for the sub-domain and port, checks DNS
-- ⬜ Let's Encrypt certificate (acme.sh, web-root method through LiteSpeed's default site – no extra site needed) with automatic renewal
-- ⬜ systemd service with hardening, first admin user + authenticator setup
-- ⬜ Option: panel reachable by trusted addresses only
-- ⬜ Provisioning of the protections themselves on a fresh server (blocker jails and filters, login-watcher service, firewall rules, OWASP rules) so the repository can rebuild everything
-- ⬜ Migration of the existing hand-built setup (`/etc/pb-security`, `pb-*` services) to the new names
+## M3 – Works next to CyberPanel, on both web servers ✅
+- ✅ Web server detection (LiteSpeed Enterprise / OpenLiteSpeed) and one-line hook into each one's own settings file
+- ✅ Web firewall keeps its own settings in its own folder (engine switch, log settings, rule list)
+- ✅ Never doubles up with CyberPanel's OWASP/Comodo rule packs or Imunify
+- ✅ **Advisor**: CyberPanel ModSecurity, Imunify, CSF/LFD, other fail2ban jails, firewalld/ufw, Cloudflare, SSH, OS updates, open databases, certificate, WordPress updates, panel exposure
+- ✅ Firewall self-test (a harmless attack-looking request must appear in the log, else the firewall is taken out again)
+- ✅ Blocker numbers (tries, window, block time per protection) editable in the panel
+- ✅ Never-block list editable; one-click Cloudflare preset
 
-## M4 – Hardening and release ⬜
+## M4 – Installer and setup ✅
+- ✅ `install.sh` / `security install`: asks for sub-domain, port, email, username, password, trusted addresses; checks DNS and Cloudflare
+- ✅ Let's Encrypt certificate through CyberPanel's own command line; opens the port in firewalld/ufw; renewed certificates are picked up without a restart
+- ✅ Setup steps with a readable plan, progress page, log, rollback on failure: admin lock, attack blocker, login watcher, baseline, web firewall
+- ✅ Takes over the earlier hand-made setup (lists and settings copied; old services, jails and firewall table moved to a dated backup folder only once the new ones are live)
+- ✅ Panel: Advisor, Setup, Settings pages; phone menu with a "More" sheet
+- ✅ `uninstall.sh` / `security uninstall` (panel only by default; protections and lock only on their own yes)
+
+## M5 – Prove it on real servers 🚧
+- 🚧 Install on the first production server (LiteSpeed Enterprise) and migrate the hand-built setup
+- ⬜ Run on a live **OpenLiteSpeed** server and fix whatever the pretend file trees missed
+- ⬜ AlmaLinux / Rocky check (log paths, dnf packages, firewalld)
+- ⬜ WordPress exclusion rules for the web firewall (fewer false alarms in wp-admin)
+
+## M6 – Hardening and release ⬜
 - ⬜ Update from the panel (pull a release, verify, restart)
 - ⬜ Release workflow and checksums
 - ⬜ Security review of the panel (headers, input validation, privilege separation)
