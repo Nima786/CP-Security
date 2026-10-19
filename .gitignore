@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.coverage
+build/
+dist/
+*.egg-info/
+
+# Local secrets and runtime files must never be committed
+*.pem
+*.key
+*.env
+panel.json
+/tls/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Screenshots made while testing the interface
+/screenshots/

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile everything
+        run: python -m compileall -q cpsec
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: No secrets or server-specific values committed
+        run: |
+          if grep -rEn --include='*' --exclude-dir=.git --exclude=ci.yml \
+               -e 'BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY' .; then
+            echo "A private key is in the repository"; exit 1
+          fi

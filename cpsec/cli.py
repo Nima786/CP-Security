@@ -1,0 +1,70 @@
+"""Command line entry point: `security` opens the menu, `security <command>` does one thing."""
+import os
+import sys
+
+from . import __version__, access, blocker, menu, sites, waf
+
+USAGE = """security  -  the server security menu.
+
+Open it with:       security
+Quick commands:     security status            health check
+                    security blocked           see who is blocked
+                    security unblock 1.2.3.4   let one address back in
+                    security myip 1.2.3.4      my home internet address changed
+                    security firewall watch    web firewall: off | watch | block
+                    security updates           which sites have updates waiting (only looks)
+                    security panel ...         the browser panel (see: security panel help)
+"""
+
+
+def _print(result):
+    print(result.message)
+    return 0 if result.ok else 1
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if hasattr(os, "geteuid") and os.geteuid() != 0 and not os.environ.get("CPSEC_ROOT"):
+        print("Please run this as root (log in as root, or put 'sudo' in front).")
+        return 1
+    if not args:
+        menu.main_menu()
+        return 0
+    cmd = args[0]
+    if cmd in ("status", "health"):
+        menu.show_health()
+    elif cmd == "blocked":
+        rows = blocker.all_blocked()
+        if rows is None:
+            print("The attack blocker is not running.")
+        for r in rows or []:
+            print("%-20s %-36s %s" % (r["ip"], r["why"], r["until_text"]))
+    elif cmd == "unblock" and len(args) == 2:
+        return _print(blocker.unban(args[1]))
+    elif cmd == "myip" and len(args) == 2:
+        return _print(access.set_home(args[1]))
+    elif cmd == "firewall" and len(args) == 2 and args[1] in ("off", "watch", "block"):
+        return _print(waf.set_mode(args[1]))
+    elif cmd == "firewall":
+        print("Web firewall: " + waf.MODE_TEXT.get(waf.mode() or "", "not set up"))
+        print("Change it with:  security firewall off|watch|block")
+    elif cmd == "updates":
+        menu.menu_updates()
+    elif cmd == "apply":
+        return _print(access.apply())
+    elif cmd == "baseline":
+        r = sites.save_baseline()
+        print("Saved how %d websites answer today (%d answering normally)." % (r["total"], r["normal"]))
+    elif cmd == "panel":
+        from .panel import cli as panel_cli
+        return panel_cli.main(args[1:])
+    elif cmd in ("--version", "version"):
+        print("CP-Security " + __version__)
+    else:
+        print(USAGE)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
