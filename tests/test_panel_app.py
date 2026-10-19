@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 from cpsec import config, settings
 from cpsec.panel import auth
@@ -336,3 +336,103 @@ class Settings(PanelCase):
         self.assertTrue(self.request("POST", "/api/settings/2fa/disable", {"password": PASSWORD})[1]["ok"])
         self.assertFalse(settings.get_user()["totp_enabled"])
         self.assertNotIn("totp_secret", settings.get_user())
+
+
+class AdvisorAndSetup(PanelCase):
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def test_the_advisor_needs_a_session_and_lists_worst_problems_first(self):
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/advisor")[0].status, 401)
+        self.login()
+        resp, data = self.request("GET", "/api/advisor")
+        self.assertEqual(resp.status, 200)
+        order = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
+        levels = [order[f["level"]] for f in data["findings"]]
+        self.assertEqual(levels, sorted(levels))
+        self.assertEqual(sum(data["counts"].values()), len(data["findings"]))
+        self.assertIn("web_server", data["server"])
+
+    def test_a_fix_button_does_its_job_and_the_finding_goes_away(self):
+        _, before = self.request("GET", "/api/advisor")
+        self.assertIn("cloudflare", [f["id"] for f in before["findings"]])
+        resp, data = self.request("POST", "/api/advisor/fix", {"id": "add_cloudflare"})
+        self.assertTrue(data["ok"], data)
+        _, after = self.request("GET", "/api/advisor?refresh=1")
+        self.assertNotIn("cloudflare", [f["id"] for f in after["findings"]])
+
+    def test_an_unknown_fix_is_refused(self):
+        resp, data = self.request("POST", "/api/advisor/fix", {"id": "format-the-disk"})
+        self.assertEqual((resp.status, data["ok"]), (400, False))
+
+    def test_the_setup_page_shows_a_plan(self):
+        resp, data = self.request("GET", "/api/setup")
+        self.assertEqual(resp.status, 200)
+        keys = [s["key"] for s in data["plan"]]
+        self.assertEqual(keys, ["migrate", "lock", "blocker", "feed", "baseline", "waf", "retire"])
+        self.assertIn("web_server", data["server"])
+
+    def test_setup_runs_in_the_background_and_reports_progress(self):
+        import time
+        resp, data = self.request("POST", "/api/setup/run", {})
+        self.assertTrue(data["ok"], data)
+        for _ in range(100):
+            _, state = self.request("GET", "/api/setup")
+            if state["job"]["status"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(state["job"]["status"], "done")
+        self.assertTrue(all(s["state"] == "done" for s in state["job"]["steps"]))
+        self.assertTrue(state["job"]["log"])
+        _, again = self.request("POST", "/api/setup/run", {})
+        self.assertFalse(again["ok"], "nothing is left to do")
+
+    def test_only_known_steps_can_be_asked_for(self):
+        for keys in (["format"], "all", [1], {"a": 1}):
+            resp, data = self.request("POST", "/api/setup/run", {"keys": keys})
+            self.assertEqual(resp.status, 400, keys)
+
+    def test_the_setup_start_is_written_to_the_activity_log(self):
+        self.request("POST", "/api/setup/run", {"keys": ["retire"]})
+        _, data = self.request("GET", "/api/activity")
+        self.assertTrue(any(e["event"] == "SETUP_START" for e in data["events"]))
+
+    def test_blocker_numbers_round_trip_and_silly_ones_are_refused(self):
+        _, data = self.request("GET", "/api/settings/blocker")
+        self.assertEqual(data["tuning"]["sshd"]["maxretry"], 5)
+        self.assertIn("sshd", data["names"])
+        resp, ok = self.request("POST", "/api/settings/blocker", {"changes": {"sshd": {"maxretry": 3}}})
+        self.assertTrue(ok["ok"], ok)
+        _, data = self.request("GET", "/api/settings/blocker")
+        self.assertEqual(data["tuning"]["sshd"]["maxretry"], 3)
+        for bad in ({"sshd": {"maxretry": 0}}, {"sshd": {"maxretry": "5"}}, {"nope": {"maxretry": 3}}):
+            resp, data = self.request("POST", "/api/settings/blocker", {"changes": bad})
+            self.assertEqual(resp.status, 400, bad)
+        self.assertEqual(self.request("POST", "/api/settings/blocker", {"changes": "x"})[0].status, 400)
+
+    def test_the_never_block_list_can_be_edited(self):
+        resp, data = self.request("POST", "/api/access/never/add", {"address": "45.60.0.77", "label": "Office"})
+        self.assertTrue(data["ok"], data)
+        _, state = self.request("GET", "/api/access")
+        self.assertIn("45.60.0.77", [n["address"] for n in state["never_block"]])
+        self.assertFalse(self.request("POST", "/api/access/never/add", {"address": "10.0.0.1"})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/access/never/remove", {"address": "45.60.0.77"})[1]["ok"])
+        self.assertEqual(self.request("POST", "/api/access/never/remove", {"address": "45.60.0.77"})[0].status, 400)
+
+    def test_the_firewall_self_test_and_the_saved_baseline(self):
+        self.assertTrue(self.request("POST", "/api/firewall/selftest", {})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/settings/baseline", {})[1]["ok"])
+
+    def test_settings_tell_the_page_about_the_second_step_and_the_server(self):
+        _, data = self.request("GET", "/api/settings")
+        self.assertIs(data["twofa"], False)
+        self.assertEqual(data["server"]["web_server_kind"], "openlitespeed")
+        self.assertTrue(data["server"]["certificate"]["found"])
+
+    def test_new_changes_still_need_the_secret_token(self):
+        self.csrf = ""
+        for path in ("/api/advisor/fix", "/api/setup/run", "/api/settings/blocker", "/api/access/never/add",
+                     "/api/firewall/selftest", "/api/settings/baseline"):
+            self.assertEqual(self.request("POST", path, {})[0].status, 403, path)

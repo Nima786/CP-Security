@@ -10,8 +10,11 @@ import datetime
 import threading
 import time
 
-from .. import access, blocker, config, health, settings, sites, updates, util, waf
+from .. import (access, advisor, blocker, config, health, provision, settings, sites, tls, updates, util, waf,
+                webserver)
 from ..util import Result
+
+BUSY = Result(False, "Setup is running right now. Try again when it has finished.", "busy")
 
 
 class LiveEngine:
@@ -21,8 +24,96 @@ class LiveEngine:
         self._lock = threading.RLock()          # one change at a time: they restart services
         self._overview = None
         self._overview_at = 0.0
+        self._advice = None
+        self._advice_at = 0.0
         self._job_lock = threading.Lock()
         self._updates = util.read_json(config.P.updates_cache, {"status": "idle", "sites": [], "finished": ""})
+        self.runner = provision.Runner()
+
+    def _guard(self):
+        """While the setup runs, other changes wait: both would be restarting the same services."""
+        return BUSY if self.runner.running() else None
+
+    # ------------------------------------------------------------------ advisor
+    def advisor_report(self, refresh=False):
+        with self._lock:
+            if refresh or self._advice is None or time.time() - self._advice_at > 120:
+                self._advice = advisor.run()
+                self._advice_at = time.time()
+            return self._advice
+
+    def advisor_fix(self, fix_id):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return advisor.apply_fix(fix_id)
+
+    # ------------------------------------------------------------------ setup
+    def setup_state(self):
+        job = self.runner.snapshot()
+        steps = provision.plan() if job["status"] != "running" else []
+        return {"plan": steps, "job": job, "server": self.server_info()}
+
+    def setup_start(self, keys):
+        res = self.runner.start(keys)
+        self._changed()
+        return res
+
+    def server_info(self):
+        info = webserver.info()
+        s = settings.load()
+        return {"web_server": info["name"], "web_server_version": info["version"],
+                "web_server_kind": info["kind"], "panel_domain": s["domain"], "panel_port": s["port"],
+                "certificate": tls.status(s["domain"]) if s["domain"] else None}
+
+    # ------------------------------------------------------------------ blocker settings, never-block list, baseline
+    def blocker_settings(self):
+        return {"tuning": blocker.tuning(), "limits": blocker.LIMITS,
+                "names": {n: config.JAIL_NAMES.get(n, n) for n in blocker.TUNABLE},
+                "missing_logs": [n for n in blocker.TUNABLE if n != "sshd" and not blocker.log_for(n)]}
+
+    def blocker_set(self, changes):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return blocker.set_tuning(changes)
+
+    def never_add(self, address, label):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return access.add_never(address, label)
+
+    def never_remove(self, address):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return access.remove_never(address)
+
+    def baseline_save(self):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            r = sites.save_baseline()
+            return Result(True, "Saved: %d of %d websites answer normally. That is the reference from now on."
+                          % (r["normal"], r["total"]))
+
+    def waf_selftest(self):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            return waf.selftest()
 
     # ------------------------------------------------------------------ overview
     def overview(self, refresh=False):
@@ -34,6 +125,7 @@ class LiveEngine:
 
     def _changed(self):
         self._overview = None
+        self._advice = None
 
     # ------------------------------------------------------------------ blocked
     def blocked(self):
@@ -41,16 +133,25 @@ class LiveEngine:
         return {"running": rows is not None, "rows": rows or [], "summary": blocker.recent_summary()}
 
     def unblock(self, ip):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return blocker.unban(ip)
 
     def unblock_all(self):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return blocker.unban_all()
 
     def set_blocking_running(self, running):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return blocker.set_running(bool(running))
@@ -61,16 +162,25 @@ class LiveEngine:
                 "lock_live": access.lock_is_live()}
 
     def access_add(self, address, label):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return access.add_admin(address, label)
 
     def access_remove(self, address, caller_ip, confirmed):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return access.remove_admin(address, caller_ip, confirmed)
 
     def access_set_home(self, address):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return access.set_home(address)
@@ -92,16 +202,25 @@ class LiveEngine:
         return waf.recent()
 
     def waf_set_mode(self, mode, threshold):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return waf.set_mode(mode, threshold)
 
     def waf_add_exception(self, scope, host, rule):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return waf.add_exception(scope, host, rule)
 
     def waf_remove_exception(self, index):
+        busy = self._guard()
+        if busy:
+            return busy
         with self._lock:
             self._changed()
             return waf.remove_exception(index)
@@ -162,6 +281,137 @@ class DemoEngine:
         self.sites = [{"domain": d, "code": "200", "ok": True} for d in
                       ("shop.example.com", "blog.example.com", "staging.example.com", "example.org")]
         self.sites.append({"domain": "old.example.com", "code": "500", "ok": False})
+        self.tuning = blocker.tuning()
+        self.fixed = set()
+        self.setup_done = {"migrate": "skip", "lock": "done", "blocker": "done", "feed": "done", "baseline": "done",
+                           "waf": "done", "retire": "todo"}
+        self.job = {"status": "idle", "steps": [], "log": [], "started": "", "finished": ""}
+        self.server = {"web_server": "OpenLiteSpeed", "web_server_version": "1.8.3", "web_server_kind": "openlitespeed",
+                       "panel_domain": "security.example.com", "panel_port": 9443,
+                       "certificate": {"found": True, "cert": "/etc/letsencrypt/live/security.example.com/fullchain.pem",
+                                       "days_left": 71}}
+
+    # ------------------------------------------------------------------ advisor (made-up findings)
+    def advisor_report(self, refresh=False):
+        def f(fid, level, title, detail="", advice="", fix=None):
+            return {"id": fid, "level": level, "title": title, "detail": detail, "advice": advice, "fix": fix}
+        found = [
+            f("modsec_other", "info", "CyberPanel already has web firewall rules switched on",
+              "OWASP rules switched on in CyberPanel.",
+              "CP-Security will not add its own rules on top, so nothing clashes."),
+            f("cloudflare", "warn", "2 websites use Cloudflare, but Cloudflare is not on the never-block list",
+              "shop.example.com, blog.example.com. Visitors reach your server through Cloudflare, so the blocker "
+              "could block Cloudflare itself and take those sites offline for everybody.",
+              "Add Cloudflare's addresses to the never-block list with the button.",
+              {"kind": "action", "id": "add_cloudflare", "label": "Add Cloudflare to the never-block list"}),
+            f("wp_updates", "warn", "3 updates waiting on 2 websites",
+              "Out-of-date plugins are how most WordPress sites get hacked.",
+              "Update them, after a backup. This panel only looks, it never installs.",
+              {"kind": "page", "id": "updates", "label": "See the list"}),
+            f("ssh", "info", "Server logins (SSH) accept passwords",
+              "The attack blocker limits guessing, but passwords can still be tried.",
+              "When you have an SSH key set up, turn password logins off."),
+            f("os_updates", "warn", "Security updates of the operating system are not automatic",
+              "Fixes for the server's own software only arrive when somebody installs them.",
+              "Install updates regularly, or turn on automatic security updates."),
+            f("lock", "ok", "The admin pages are locked to %d trusted addresses" % len(self.trusted)),
+            f("panel_access", "ok", "The panel can only be opened from trusted addresses"),
+            f("cert", "ok", "The panel's certificate is valid for 71 more days"),
+            f("webserver", "ok", "Web server: OpenLiteSpeed 1.8.3"),
+        ]
+        found = [x for x in found if x["id"] not in self.fixed]
+        order = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
+        found.sort(key=lambda x: order[x["level"]])
+        return {"checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "counts": {lvl: sum(1 for x in found if x["level"] == lvl) for lvl in order},
+                "findings": found,
+                "server": {"os": "Ubuntu 22.04.5 LTS", "web_server": "OpenLiteSpeed", "web_server_version": "1.8.3",
+                           "cyberpanel": True}}
+
+    def advisor_fix(self, fix_id):
+        if fix_id == "add_cloudflare":
+            self.fixed.add("cloudflare")
+            self.never.append({"address": "173.245.48.0/20", "label": "Cloudflare"})
+            return Result(True, "15 Cloudflare addresses were added to the never-block list.")
+        return Result(False, "Unknown fix.", "unknown")
+
+    # ------------------------------------------------------------------ setup (a pretend run, so the page can be designed)
+    def server_info(self):
+        return copy.deepcopy(self.server)
+
+    def setup_state(self):
+        job = copy.deepcopy(self.job)
+        if job["status"] == "running":
+            return {"plan": [], "job": job, "server": self.server_info()}
+        titles = {"migrate": "Take over the earlier setup's lists and settings", "lock": "Lock the admin pages to trusted addresses",
+                  "blocker": "Install the attack blocker", "feed": "Start the WordPress login watcher",
+                  "baseline": "Remember how your websites answer today", "waf": "Set up the web firewall (watch-only)",
+                  "retire": "Put the earlier hand-made setup away"}
+        notes = {"done": "Already in place.", "skip": "Nothing to do on this server.",
+                 "todo": "Not set up yet.", "blocked": "Waiting for something else first."}
+        plan = [{"key": k, "title": titles[k], "state": self.setup_done[k], "note": notes[self.setup_done[k]],
+                 "will_do": ["Does what the title says, safely, and undoes itself if something goes wrong."]
+                 if self.setup_done[k] == "todo" else []} for k in titles]
+        return {"plan": plan, "job": job, "server": self.server_info()}
+
+    def setup_start(self, keys):
+        todo = [k for k, v in self.setup_done.items() if v == "todo" and (keys is None or k in keys)]
+        if not todo:
+            return Result(False, "Nothing to do.", "empty")
+        titles = dict((s["key"], s["title"]) for s in self.setup_state()["plan"])
+        self.job = {"status": "running", "log": [], "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": "",
+                    "steps": [{"key": k, "title": titles[k], "state": "waiting", "message": ""} for k in todo]}
+
+        def work():
+            for i, k in enumerate(todo):
+                self.job["steps"][i]["state"] = "running"
+                self.job["log"].append("%s  Starting: %s" % (time.strftime("%H:%M:%S"), titles[k]))
+                time.sleep(0.8)
+                self.job["steps"][i].update(state="done", message="Done.")
+                self.setup_done[k] = "done"
+            self.job["status"] = "done"
+            self.job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        threading.Thread(target=work, daemon=True).start()
+        return Result(True, "Setup started.")
+
+    # ------------------------------------------------------------------ settings pages
+    def blocker_settings(self):
+        return {"tuning": copy.deepcopy(self.tuning), "limits": blocker.LIMITS,
+                "names": {n: config.JAIL_NAMES.get(n, n) for n in blocker.TUNABLE}, "missing_logs": []}
+
+    def blocker_set(self, changes):
+        for jail, values in (changes or {}).items():
+            if jail not in self.tuning:
+                return Result(False, "Unknown protection: %s" % jail, "invalid")
+            for key, value in values.items():
+                if key not in blocker.LIMITS or isinstance(value, bool) or not isinstance(value, int) \
+                        or not blocker.LIMITS[key][0] <= value <= blocker.LIMITS[key][1]:
+                    return Result(False, "%s must be a whole number in range." % key, "invalid")
+                self.tuning[jail][key] = value
+        return Result(True, "Saved. The blocker uses the new numbers now.")
+
+    def never_add(self, address, label):
+        addr, err = access.check_address(address)
+        if err:
+            return Result(False, err, "invalid")
+        if any(n["address"] == addr for n in self.never):
+            return Result(False, "%s is already on the list." % addr, "exists")
+        self.never.append({"address": addr, "label": label or "Added from the panel"})
+        return Result(True, "%s will never be blocked automatically." % addr)
+
+    def never_remove(self, address):
+        if not any(n["address"] == address for n in self.never):
+            return Result(False, "%s is not on the list." % address, "missing")
+        self.never = [n for n in self.never if n["address"] != address]
+        return Result(True, "%s can be blocked again if it misbehaves." % address)
+
+    def baseline_save(self):
+        return Result(True, "Saved: 4 of 5 websites answer normally. That is the reference from now on.")
+
+    def waf_selftest(self):
+        if self.mode == "off":
+            return Result(False, "The web firewall is not switched on, so there is nothing to test.", "not_active")
+        return Result(True, "The firewall saw the test request.", "seen")
 
     def overview(self, refresh=False):
         rows = [

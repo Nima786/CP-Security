@@ -12,7 +12,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from .. import __version__, settings
+from .. import __version__, provision, settings
 from . import activity, auth
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -118,6 +118,16 @@ class App:
             ("POST", "/api/access/add"): (self.api_access_add, True),
             ("POST", "/api/access/remove"): (self.api_access_remove, True),
             ("POST", "/api/access/home"): (self.api_access_home, True),
+            ("POST", "/api/access/never/add"): (self.api_never_add, True),
+            ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/advisor"): (self.api_advisor, True),
+            ("POST", "/api/advisor/fix"): (self.api_advisor_fix, True),
+            ("GET", "/api/setup"): (self.api_setup, True),
+            ("POST", "/api/setup/run"): (self.api_setup_run, True),
+            ("POST", "/api/firewall/selftest"): (self.api_waf_selftest, True),
+            ("GET", "/api/settings/blocker"): (self.api_blocker_get, True),
+            ("POST", "/api/settings/blocker"): (self.api_blocker_set, True),
+            ("POST", "/api/settings/baseline"): (self.api_baseline, True),
             ("GET", "/api/firewall"): (self.api_waf, True),
             ("POST", "/api/firewall/mode"): (self.api_waf_mode, True),
             ("POST", "/api/firewall/exception"): (self.api_waf_exception_add, True),
@@ -317,6 +327,62 @@ class App:
         activity.write("ACCESS_HOME", ip=req.ip, target=address, ok=res.ok)
         return _result(res)
 
+    def api_never_add(self, req, session):
+        b = req.json()
+        res = self.engine.never_add(_text(b.get("address"), 64), _text(b.get("label"), 60))
+        activity.write("NEVER_BLOCK_ADD", ip=req.ip, target=_text(b.get("address"), 64), ok=res.ok)
+        return _result(res)
+
+    def api_never_remove(self, req, session):
+        address = _text(req.json().get("address"), 64)
+        res = self.engine.never_remove(address)
+        activity.write("NEVER_BLOCK_REMOVE", ip=req.ip, target=address, ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ advisor and setup
+    def api_advisor(self, req, session):
+        return _json(200, self.engine.advisor_report(refresh=req.query.get("refresh") == "1"))
+
+    def api_advisor_fix(self, req, session):
+        fix_id = _text(req.json().get("id"), 40)
+        res = self.engine.advisor_fix(fix_id)
+        activity.write("ADVISOR_FIX", ip=req.ip, fix=fix_id, ok=res.ok)
+        return _result(res)
+
+    def api_setup(self, req, session):
+        return _json(200, self.engine.setup_state())
+
+    def api_setup_run(self, req, session):
+        keys = req.json().get("keys")
+        if keys is not None:
+            if not isinstance(keys, list) or not all(isinstance(k, str) and k in provision.BY_KEY for k in keys):
+                return _json(400, {"ok": False, "code": "invalid", "message": "Unknown setup step."})
+        res = self.engine.setup_start(keys)
+        activity.write("SETUP_START", ip=req.ip, steps=",".join(keys) if keys else "all", ok=res.ok)
+        return _result(res)
+
+    def api_waf_selftest(self, req, session):
+        res = self.engine.waf_selftest()
+        activity.write("FIREWALL_SELFTEST", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ settings: blocker numbers and the saved baseline
+    def api_blocker_get(self, req, session):
+        return _json(200, self.engine.blocker_settings())
+
+    def api_blocker_set(self, req, session):
+        changes = req.json().get("changes")
+        if not isinstance(changes, dict) or not all(isinstance(v, dict) for v in changes.values()):
+            return _json(400, {"ok": False, "code": "invalid", "message": "Nothing to save."})
+        res = self.engine.blocker_set(changes)
+        activity.write("BLOCKER_SETTINGS", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    def api_baseline(self, req, session):
+        res = self.engine.baseline_save()
+        activity.write("BASELINE_SAVED", ip=req.ip, ok=res.ok)
+        return _result(res)
+
     # ------------------------------------------------------------------ web firewall
     def api_waf(self, req, session):
         data = self.engine.waf_state()
@@ -365,8 +431,11 @@ class App:
     # ------------------------------------------------------------------ settings
     def api_settings(self, req, session):
         s = settings.load()
+        user = settings.get_user() or {}
         return _json(200, {"domain": s["domain"], "port": s["port"], "access": s["access"],
                            "user": session["user"], "version": __version__, "client_ip": req.ip,
+                           "twofa": bool(user.get("totp_enabled") and user.get("totp_secret")),
+                           "server": self.engine.server_info(),
                            "client_ip_trusted": any(t["address"] == req.ip for t in self.engine.access_state()["trusted"])})
 
     def api_password(self, req, session):
