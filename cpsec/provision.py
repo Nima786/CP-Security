@@ -323,6 +323,8 @@ class Lock(Step):
 
     def state(self):
         if not access.list_admin():
+            if access.list_legacy_admin():
+                return "todo", "Your trusted addresses will be copied from the earlier setup, then the lock is set up."
             return "blocked", "Add at least one trusted address first (yours), or you would lock yourself out."
         if access.lock_is_live() and os.path.exists(config.P.systemd_dir + "/" + SERVICE_LOCK) \
                 and unit_enabled(SERVICE_LOCK):
@@ -336,6 +338,11 @@ class Lock(Step):
                 "The lock is reloaded automatically after a server restart."]
 
     def run(self, log):
+        if not access.list_admin() and access.list_legacy_admin():
+            BY_KEY["migrate"].run(log)                          # bring the old trusted addresses over first
+        if not access.list_admin():
+            # an empty list would shut out everybody except this machine itself
+            return Result(False, "There is no trusted address yet, so the lock was not set up.", "no_trusted")
         if not shutil.which("nft"):
             res = install_packages(["nftables"])
             if not res.ok:
@@ -452,9 +459,10 @@ class Waf(Step):
             return "No LiteSpeed web server was found."
         if not webserver.engine_installed():
             return webserver.how_to_install_engine()
-        packs = webserver.other_rule_packs()
+        packs = webserver.rule_packs_in_use()
         if packs:
-            return ("%s. They use the same rule numbers as ours, so CP-Security leaves the web firewall to them."
+            return ("%s, and they are running. They use the same rule numbers as ours, so CP-Security leaves the web "
+                    "firewall to them. (To use CP-Security's instead, switch ModSecurity off in CyberPanel first.)"
                     % " and ".join(packs))
         p = config.P
         if any(os.path.exists(p.at(x)) for x in ("/opt/imunify360", "/usr/bin/imunify360-agent")):
@@ -467,10 +475,15 @@ class Waf(Step):
         reason = self._blocker_reason()
         if reason:
             return "blocked", reason
+        if webserver.other_rule_packs():
+            return "todo", ("CyberPanel's own rule pack is installed but ModSecurity is switched off, so it protects nothing. "
+                            "It will be put aside (its lines are commented out, nothing is deleted) and replaced.")
         return "todo", "The web firewall is not set up."
 
     def describe(self):
-        return ["Download the OWASP rules version %s and check their fingerprint." % CRS_VERSION,
+        aside = ["CyberPanel's own rule pack is installed (switched off). Its lines are commented out so the two sets of "
+                 "rules cannot clash; they can be put back at any time."] if webserver.other_rule_packs() else []
+        return aside + ["Download the OWASP rules version %s and check their fingerprint." % CRS_VERSION,
                 "Use the gentlest sensitivity level, so normal visitors are not bothered.",
                 "Start in watch-only mode: suspicious requests are recorded, none is refused.",
                 "Restart the web server gracefully and check that your websites still answer. "
@@ -482,8 +495,8 @@ class Waf(Step):
         if reason:
             return Result(False, reason, "blocked")
         p = config.P
-        paths = [webserver.firewall_file(), p.waf_main, p.waf_rules, p.waf_block, p.waf_before, p.waf_after,
-                 p.waf_setup, p.waf_settings, p.waf_exceptions]
+        paths = [webserver.firewall_file(), p.lsws_conf + "/rules.conf", p.waf_main, p.waf_rules, p.waf_block,
+                 p.waf_before, p.waf_after, p.waf_setup, p.waf_settings, p.waf_exceptions]
         snap = util.snapshot(paths)
         fresh = not os.path.exists(p.waf_dir)
         tmp = tempfile.mkdtemp(prefix="cps-crs-")
@@ -531,6 +544,9 @@ class Waf(Step):
             ensure_audit_logrotate()
             if not os.path.isdir(p.modsec_data):
                 os.makedirs(p.modsec_data, exist_ok=True)
+            if webserver.other_rule_packs():
+                log("setting CyberPanel's switched-off rule pack aside (%d line(s)); nothing is deleted"
+                    % webserver.park_rule_packs())
             res = webserver.connect()
             if not res.ok:
                 return undo(res.message, res.code)

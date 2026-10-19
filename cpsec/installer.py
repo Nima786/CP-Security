@@ -213,6 +213,9 @@ def gather(c, args):
 
     trusted = []
     existing = [a["address"] for a in access.list_admin()]
+    for a in access.list_legacy_admin():                    # the earlier setup's trusted addresses count too
+        if a["address"] not in existing:
+            existing.append(a["address"])
     if existing:
         c.say("Already trusted on this server: %s" % ", ".join(existing))
     candidates = list(args.trusted_ip or [])
@@ -332,6 +335,9 @@ def execute(c, cfg, source_dir):
         c.say("  No certificate for %s was found, and --skip-certificate was given." % cfg["domain"])
         return 1
 
+    # bring the earlier setup's lists over first, so its trusted addresses are not lost
+    if provision.BY_KEY["migrate"].state()[0] == "todo":
+        c.say("  " + provision.BY_KEY["migrate"].run(lambda line: None).message)
     # settings, login and trusted addresses
     settings.save({"domain": cfg["domain"], "port": cfg["port"], "access": cfg["access"]})
     settings.save_user({"name": cfg["username"], "password_hash": auth.hash_password(cfg["password"]),

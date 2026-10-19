@@ -24,6 +24,7 @@ NAMES = {ENTERPRISE: "LiteSpeed Enterprise", OPENLITESPEED: "OpenLiteSpeed"}
 LEGACY_WAF_DIR_NAMES = ("pb-waf",)
 
 HOOK_COMMENT = "# CP-Security web firewall (keeps its own settings in one separate file)"
+PARK_MARK = "#CPS-PARKED# "     # put in front of a CyberPanel rule-pack line that CP-Security set aside (reversible)
 _MODULE_START = re.compile(r"^\s*module\s+mod_security\s*\{")
 
 
@@ -143,21 +144,73 @@ def hook_present():
     return any(_is_our_line(l) and "cps-waf" in l for l in conf.split("\n"))
 
 
-def other_rule_packs():
-    """Rule collections that someone else (usually CyberPanel's own page) switched on.
+def _pack_files():
+    """The files in which CyberPanel lists its rule packs."""
+    if kind() == OPENLITESPEED:
+        return [config.P.ols_conf]
+    return [config.P.modsec_conf, config.P.lsws_conf + "/rules.conf"]
 
-    They use the same rule numbers as ours. Two copies cannot run together, so we must know.
-    Returns a list of short names like 'OWASP rules (CyberPanel)'.
+
+def other_rule_packs():
+    """Rule collections that CyberPanel's own page installed and listed (OWASP, Comodo) with real files behind them.
+
+    They use the same rule numbers as ours. Two copies cannot run together, so we must know. They may be
+    installed but switched off (see engine_is_on); that still clashes, but then they protect nothing.
+    Returns a list of short names like 'OWASP rules switched on in CyberPanel'.
     """
-    p = config.P
+    text = "\n".join(util.read_text(path) for path in _pack_files())
     found = []
-    text = util.read_text(p.ols_conf) if kind() == OPENLITESPEED else util.read_text(p.lsws_conf + "/rules.conf")
-    if kind() == ENTERPRISE:
-        text += "\n" + util.read_text(p.modsec_conf)
     for label, word in (("OWASP rules switched on in CyberPanel", "owasp"), ("Comodo rules switched on in CyberPanel", "comodo")):
         if any(word in path.lower() and _has_files(path) for path in _included_paths(text)):
             found.append(label)
     return found
+
+
+def engine_is_on():
+    """Is ModSecurity switched on in the web server's own settings (the last SecRuleEngine line wins)?"""
+    text = util.read_text(firewall_file())
+    if kind() == OPENLITESPEED and re.search(r"^\s*modsecurity\s+off\b", text, re.M | re.I):
+        return False
+    values = re.findall(r"^\s*SecRuleEngine\s+(\S+)", text, re.M | re.I)
+    return bool(values) and values[-1].lower() != "off"
+
+
+def rule_packs_in_use():
+    """Rule packs of CyberPanel that really run: listed with files behind them AND ModSecurity is on."""
+    return other_rule_packs() if engine_is_on() else []
+
+
+def park_rule_packs():
+    """Comment out the lines that load CyberPanel's rule packs, so ours can run. Nothing is deleted.
+    Returns how many lines were set aside."""
+    parked = 0
+    for path in _pack_files():
+        text = util.read_text(path)
+        lines, changed = [], 0
+        for line in text.split("\n"):
+            m = re.match(r"^\s*(?:include|modsecurity_rules_file)\s+(\S+)\s*$", line, re.I)
+            if m and any(w in m.group(1).lower() for w in ("owasp", "comodo")) and _has_files(m.group(1)):
+                lines.append(PARK_MARK + line.strip())
+                changed += 1
+            else:
+                lines.append(line)
+        if changed:
+            util.backup_file(path, config.P.backup_dir)
+            util.atomic_write(path, "\n".join(lines), 0o644, "lsadm:lsadm")
+            parked += changed
+    return parked
+
+
+def unpark_rule_packs():
+    """Put CyberPanel's rule-pack lines back (the opposite of park_rule_packs)."""
+    restored = 0
+    for path in _pack_files():
+        text = util.read_text(path)
+        if PARK_MARK in text:
+            util.backup_file(path, config.P.backup_dir)
+            restored += text.count(PARK_MARK)
+            util.atomic_write(path, text.replace(PARK_MARK, ""), 0o644, "lsadm:lsadm")
+    return restored
 
 
 def _included_paths(text):

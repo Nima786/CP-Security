@@ -39,7 +39,7 @@ class WebFirewall(Quiet):
     def test_cyberpanels_rules_alone_are_left_alone(self):
         self.write(config.P.lsws_xml, "<config/>")
         self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/x.conf"), "")
-        self.write(config.P.modsec_conf, "<IfModule security2_module>\nInclude /usr/local/lsws/conf/comodo_litespeed/x.conf\n</IfModule>\n")
+        self.write(config.P.modsec_conf, "<IfModule security2_module>\nSecRuleEngine On\nInclude /usr/local/lsws/conf/comodo_litespeed/x.conf\n</IfModule>\n")
         found = advisor.check_modsecurity()
         self.assertEqual(ids(found), ["modsec_other"])
         self.assertIn("will not add its own rules", found[0]["advice"])

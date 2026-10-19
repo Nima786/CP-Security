@@ -62,6 +62,11 @@ def list_admin():
             for a, l in read_list(config.P.admin_list)]
 
 
+def list_legacy_admin():
+    """Trusted addresses of the earlier hand-made setup (not yet copied over), or an empty list."""
+    return [{"address": a, "label": l} for a, l in read_list(config.P.legacy_conf_dir + "/admin-access.list")]
+
+
 def list_never_block():
     return [{"address": a, "label": l} for a, l in read_list(config.P.never_list)]
 

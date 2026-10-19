@@ -416,3 +416,25 @@ class CommandLine(EnvTestCase):
         with mock.patch("builtins.print") as shown:
             self.assertEqual(cli.main(["nonsense"]), 1)
         self.assertIn("security install", str(shown.call_args[0][0]))
+
+class CarryingTheOldAddressesOver(Doing):
+    def test_the_old_trusted_addresses_survive_an_install_that_adds_a_new_one(self):
+        self.write(config.P.legacy_conf_dir + "/admin-access.list", "198.51.100.20 | Home Wi-Fi\n")
+        self.write(config.P.legacy_conf_dir + "/never-block.list", "104.16.0.0/13 | Cloudflare\n")
+        self.write(config.P.systemd_dir + "/pb-admin-firewall.service", "[Unit]\n")
+        installer.execute(FakeConsole(), self.cfg, self.source)
+        listed = [a["address"] for a in access.list_admin()]
+        self.assertEqual(sorted(listed), ["198.51.100.20", "45.60.0.10"])
+        self.assertEqual([a["address"] for a in access.list_never_block()], ["104.16.0.0/13"])
+
+    def test_the_questions_show_the_old_addresses_as_already_trusted(self):
+        self.write(config.P.legacy_conf_dir + "/admin-access.list", "198.51.100.20 | Home Wi-Fi\n")
+        self.write(config.P.systemd_dir + "/pb-admin-firewall.service", "[Unit]\n")
+        self.patch("cpsec.installer.preflight", return_value=[("ok", "x")])
+        self.patch("cpsec.installer.port_in_use", return_value=False)
+        self.patch("cpsec.installer.netinfo.check_domain", return_value=GOOD_DNS)
+        c = FakeConsole(answers=[("Another trusted", "")], yeses={"You are connected": False})
+        with mock.patch.dict(os.environ, {"SSH_CONNECTION": "45.60.0.10 51000 185.1.1.1 22"}):
+            cfg = installer.gather(c, args(domain="security.example.com"))
+        self.assertIsNotNone(cfg, "no new address is needed when the old ones are there")
+        self.assertIn("198.51.100.20", c.text)

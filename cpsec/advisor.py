@@ -20,7 +20,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from . import access, blocker, config, netinfo, settings, sites, tls, util, waf, webserver
+from . import access, blocker, config, netinfo, provision, settings, sites, tls, util, waf, webserver
 from .util import Result
 
 LEVEL_ORDER = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
@@ -73,8 +73,14 @@ def check_modsecurity():
     if kind is None:
         return out
     packs = webserver.other_rule_packs()
+    running = webserver.rule_packs_in_use()
     ours = waf.mode()
-    if packs:
+    if packs and not running and ours is None:
+        out.append(F("modsec_idle", "info", "CyberPanel's web firewall rules are installed but switched off",
+                     " and ".join(packs) + ", yet ModSecurity is off in CyberPanel, so they protect nothing.",
+                     "The Setup page can put them aside (the lines are commented out, nothing is deleted) and start "
+                     "CP-Security's firewall in watch-only mode instead.", _page("setup", "Open Setup")))
+    elif packs:
         names = " and ".join(packs)
         if ours is not None:
             out.append(F("modsec_clash", "bad", "Two sets of web firewall rules are active at the same time",
@@ -285,6 +291,10 @@ def check_general_firewall():
 
 
 def check_lock():
+    if not access.lock_is_live() and provision.legacy_nft_tables():
+        return [F("lock", "info", "The admin pages are locked by the earlier hand-made setup",
+                  "Its lock is working. CP-Security has not taken it over yet.",
+                  "Run Setup: it copies your trusted addresses and sets up the new lock first.", _page("setup", "Open Setup"))]
     if not access.lock_is_live():
         return [F("lock", "bad", "The admin pages are NOT locked",
                   "CyberPanel, the LiteSpeed admin and the web terminal can be opened by anybody who finds them.",
