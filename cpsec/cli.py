@@ -2,7 +2,7 @@
 import os
 import sys
 
-from . import __version__, access, blocker, menu, sites, waf
+from . import __version__, access, blocker, menu, provision, selfupdate, sites, waf
 
 USAGE = """security  -  the server security menu.
 
@@ -17,6 +17,7 @@ Quick commands:     security status            health check
                     security setup             show the plan and set up what is missing (--yes: no questions)
                     security selftest          prove the web firewall sees attacks
                     security panel ...         the browser panel (see: security panel help)
+                    security update            look for a newer version and install it (--check: only look)
                     security install           install the panel (asks a few questions)
                     security uninstall         take the panel away again (--purge: delete settings too)
 """
@@ -25,6 +26,28 @@ Quick commands:     security status            health check
 def _print(result):
     print(result.message)
     return 0 if result.ok else 1
+
+
+def _update(options):
+    """security update [--check] [--yes] [--force]"""
+    updater = selfupdate.Updater()
+    found = updater.check()
+    print(found.message)
+    if not found.ok or "--check" in options:
+        return 0 if found.ok else 1
+    state = updater.state()
+    force = "--force" in options
+    if not (state["available"] or force):
+        return 0
+    if state["notes"]:
+        print("\nWhat is new:\n" + state["notes"])
+    if "--yes" not in options and menu.ask("\nInstall version %s now? The panel restarts for a few seconds. (yes/no): " % state["latest"]).lower() != "yes":
+        return 1
+    res = updater.install(state["latest"], force=force, background=False)
+    for line in updater.state()["job"]["log"]:
+        print("  " + line)
+    print(res.message if not res.ok else updater.state()["job"]["message"])
+    return 0 if res.ok and updater.state()["job"]["status"] != "failed" else 1
 
 
 def main(argv=None):
@@ -66,6 +89,11 @@ def main(argv=None):
         return menu.run_setup(assume_yes="--yes" in args)
     elif cmd == "selftest":
         return _print(waf.selftest())
+    elif cmd == "update":
+        return _update(args[1:])
+    elif cmd == "post-update":
+        for line in provision.refresh_after_update():
+            print("refreshed: " + line)
     elif cmd == "install":
         from . import installer
         return installer.main(args[1:])

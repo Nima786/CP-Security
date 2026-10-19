@@ -49,6 +49,29 @@ class UpdatesParsing(EnvTestCase):
         self.assertIn(("WooCommerce, Legacy", "1.1", "plugin"), what)
         self.assertIn(("WordPress itself", "6.8.11", "core-minor"), what)
 
+    def test_themes_come_with_their_name_and_whether_they_are_switched_on(self):
+        plugins = "name,title,status,version,update_version\nwoocommerce,WooCommerce,active,10.0.4,11.2.1\nold-gallery,Old gallery,inactive,2.1,2.4\n"
+        themes = "name,title,status,version,update_version\nbricks,Bricks,active,1.9.8,1.12.4\n"
+        s = updates.parse_site("a.example.com", plugins, "", themes)
+        rows = {(i["kind"], i["slug"]): i for i in s["items"]}
+        self.assertEqual(rows[("plugin", "woocommerce")]["what"], "WooCommerce")
+        self.assertEqual(rows[("plugin", "old-gallery")]["status"], "inactive")
+        self.assertEqual((rows[("theme", "bricks")]["from"], rows[("theme", "bricks")]["to"]), ("1.9.8", "1.12.4"))
+        self.assertEqual(len(s["items"]), 3)
+
+    def test_a_site_with_only_theme_updates_is_still_checked(self):
+        s = updates.parse_site("a.example.com", None, None, "name,title,status,version,update_version\nbricks,Bricks,active,1,2\n")
+        self.assertTrue(s["checked"])
+        self.assertEqual([i["kind"] for i in s["items"]], ["theme"])
+
+    def test_the_scan_asks_for_plugins_themes_and_wordpress(self):
+        asked = []
+        self.patch("cpsec.updates._wp", side_effect=lambda docroot, user, args: asked.append(args) or "")
+        updates._look(("/home/a/public_html", "u", "a.example.com"))
+        joined = " | ".join(asked)
+        self.assertIn("plugin list", joined)
+        self.assertIn("theme list", joined)
+        self.assertIn("core check-update", joined)
     def test_a_site_that_could_not_be_read_is_marked_unchecked(self):
         self.assertEqual(updates.parse_site("a.example.com", None, None), {"site": "a.example.com", "items": [], "checked": False})
 

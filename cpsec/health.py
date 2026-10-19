@@ -9,7 +9,9 @@ def _row(key, label, status, text):
     return {"key": key, "label": label, "status": status, "text": text}
 
 
-def overview(site_results=None):
+def overview(site_results=None, sites_pending=False):
+    """The one-page picture. Asking every website takes several seconds, so the panel passes the last known answers
+    (site_results) or says the check is still pending; with neither, the websites are asked right here (menu, command line)."""
     rows, problems = [], 0
 
     st = blocker.status()
@@ -47,8 +49,10 @@ def overview(site_results=None):
     ok, text = waf.state()
     rows.append(_row("waf", "Web firewall", "ok" if ok else "off", text))
 
-    summary = sites.summarize(site_results)
-    if summary["new_problems"]:
+    summary = sites.summarize([] if sites_pending else site_results)
+    if sites_pending:
+        rows.append(_row("sites", "Websites", "off", "Checking all websites… the first check takes a few seconds"))
+    elif summary["new_problems"]:
         rows.append(_row("sites", "Websites", "bad", "%d website(s) have a NEW problem" % len(summary["new_problems"])))
         problems += 1
     else:
@@ -64,4 +68,5 @@ def overview(site_results=None):
         "sites": summary,
         "blocked_24h": len(blocker.ban_events(1)) if st["installed"] else 0,
         "waf_mode": waf.mode(),
+        "sites_pending": bool(sites_pending),
     }

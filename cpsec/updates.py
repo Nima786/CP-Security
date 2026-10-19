@@ -1,4 +1,5 @@
-"""Which WordPress sites have updates waiting. This only looks; it never installs anything."""
+"""Which WordPress sites have updates waiting: WordPress itself, plugins and themes.
+This only looks; it never installs anything."""
 import csv
 import glob
 import io
@@ -40,20 +41,28 @@ def _wp(docroot, user, args):
 
 def _look(site):
     docroot, user, name = site
-    plugins = _wp(docroot, user, "plugin list --update=available --fields=title,version,update_version --format=csv")
+    plugins = _wp(docroot, user, "plugin list --update=available --fields=name,title,status,version,update_version --format=csv")
     core = _wp(docroot, user, "core check-update --fields=version,update_type --format=csv")
-    return name, plugins, core
+    themes = _wp(docroot, user, "theme list --update=available --fields=name,title,status,version,update_version --format=csv")
+    return name, plugins, core, themes
 
 
-def parse_site(name, plugins_csv, core_csv):
-    """-> {'site', 'items': [{'what', 'from', 'to', 'kind'}], 'checked': bool}"""
-    if plugins_csv is None and core_csv is None:
-        return {"site": name, "items": [], "checked": False}
+def _rows(kind, text):
     items = []
-    if plugins_csv:
-        for row in csv.DictReader(io.StringIO(plugins_csv.strip())):
-            items.append({"what": row.get("title", "?"), "from": row.get("version", ""),
-                          "to": row.get("update_version", ""), "kind": "plugin"})
+    if text and text.strip():
+        for row in csv.DictReader(io.StringIO(text.strip())):
+            items.append({"what": row.get("title") or row.get("name") or "?", "slug": row.get("name", ""),
+                          "from": row.get("version", ""), "to": row.get("update_version", ""), "kind": kind,
+                          "status": row.get("status", "")})
+    return items
+
+
+def parse_site(name, plugins_csv, core_csv, themes_csv=None):
+    """-> {'site', 'items': [{'what', 'slug', 'from', 'to', 'kind', 'status'}], 'checked': bool}
+    kind is 'plugin', 'theme' or 'core-<type>'; status is active / inactive for plugins and themes."""
+    if plugins_csv is None and core_csv is None and themes_csv is None:
+        return {"site": name, "items": [], "checked": False}
+    items = _rows("plugin", plugins_csv) + _rows("theme", themes_csv)
     for line in (core_csv or "").strip().splitlines():
         if re.match(r"^\d", line):
             version, _, update_type = line.partition(",")

@@ -226,3 +226,19 @@ summary { cursor: pointer; font-weight: 600; color: var(--brand); }
   .step { padding: .8rem 1rem; }
   .numbers input { width: 5rem; }
 }
+
+/* ---------- the version bar at the top of every page ---------- */
+.versionbar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.1rem; padding: .5rem .75rem; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.versionbar .ver { font-weight: 700; font-variant-numeric: tabular-nums; }
+.versionbar .right { margin-left: auto; }
+@media (max-width: 900px) { .versionbar { margin-bottom: .8rem; } }
+
+@media (max-width: 600px) {
+  /* narrow screens: tighter tables so the last column is not cut off */
+  .table-wrap table { font-size: .86rem; }
+  .table-wrap th, .table-wrap td { padding: .5rem .45rem; }
+  .table-wrap th:first-child, .table-wrap td:first-child { padding-left: .8rem; }
+  .table-wrap th:last-child, .table-wrap td:last-child { padding-right: .8rem; }
+  .table-wrap th { font-size: .7rem; letter-spacing: .02em; }
+  .versionbar .right { margin-left: 0; }
+}

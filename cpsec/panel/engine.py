@@ -10,8 +10,8 @@ import datetime
 import threading
 import time
 
-from .. import (access, advisor, blocker, config, health, provision, settings, sites, tls, updates, util, waf,
-                webserver)
+from .. import (__version__, access, advisor, blocker, config, health, provision, selfupdate, settings, sites, tls,
+                updates, util, waf, webserver)
 from ..util import Result
 
 BUSY = Result(False, "Setup is running right now. Try again when it has finished.", "busy")
@@ -26,9 +26,16 @@ class LiveEngine:
         self._overview_at = 0.0
         self._advice = None
         self._advice_at = 0.0
+        self._site_results = None           # last answers of the websites; None until the first check has finished
+        self._site_checked_at = 0.0
+        self._site_checking = False
+        self._state_lock = threading.Lock()
+        self._overview_lock = threading.Lock()      # reading pages never waits for a change that restarts services
+        self._advice_lock = threading.Lock()
         self._job_lock = threading.Lock()
         self._updates = util.read_json(config.P.updates_cache, {"status": "idle", "sites": [], "finished": ""})
         self.runner = provision.Runner()
+        self.updater = selfupdate.Updater()
 
     def _guard(self):
         """While the setup runs, other changes wait: both would be restarting the same services."""
@@ -36,7 +43,7 @@ class LiveEngine:
 
     # ------------------------------------------------------------------ advisor
     def advisor_report(self, refresh=False):
-        with self._lock:
+        with self._advice_lock:
             if refresh or self._advice is None or time.time() - self._advice_at > 120:
                 self._advice = advisor.run()
                 self._advice_at = time.time()
@@ -116,12 +123,69 @@ class LiveEngine:
             return waf.selftest()
 
     # ------------------------------------------------------------------ overview
+    # Asking all websites takes 4-10 seconds. The page must not wait for it: show the last answers at once and
+    # refresh them in the background (every 5 minutes, or when "Check again" is pressed).
+    def _spawn(self, fn):
+        threading.Thread(target=fn, daemon=True).start()
+
+    def _check_sites_now(self):
+        try:
+            results = sites.check_sites()
+        except Exception:                                   # a failed look must never take the panel down
+            results = None
+        with self._state_lock:
+            if results is not None:
+                self._site_results = results
+                self._site_checked_at = time.time()
+            self._site_checking = False
+            self._overview = None                           # the next request is built with the fresh answers
+
+    def _start_site_check(self):
+        with self._state_lock:
+            if self._site_checking:
+                return
+            self._site_checking = True
+        self._spawn(self._check_sites_now)
+
+    def warm_up(self):
+        """Called once when the panel starts, so the first visitor does not wait."""
+        self._start_site_check()
+        self._spawn(self._update_loop)
+
+    def _update_loop(self):
+        """Look for a newer version when the panel starts and then twice a day."""
+        while True:
+            try:
+                self.updater.check()
+            except Exception:
+                pass
+            time.sleep(12 * 3600)
+
+    # ------------------------------------------------------------------ the panel's own updates
+    def update_state(self):
+        return self.updater.state()
+
+    def update_check(self):
+        return self.updater.check()
+
+    def update_install(self, version):
+        busy = self._guard()
+        if busy:
+            return busy
+        return self.updater.install(version)
+
     def overview(self, refresh=False):
-        with self._lock:
+        with self._overview_lock:
+            if refresh or self._site_results is None or time.time() - self._site_checked_at > 300:
+                self._start_site_check()
             if refresh or self._overview is None or time.time() - self._overview_at > 45:
-                self._overview = health.overview()
+                self._overview = health.overview(self._site_results, sites_pending=self._site_results is None)
                 self._overview_at = time.time()
-            return self._overview
+            data = dict(self._overview)
+            data["sites_checking"] = self._site_checking
+            data["sites_checked_at"] = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._site_checked_at))
+                                        if self._site_checked_at else "")
+            return data
 
     def _changed(self):
         self._overview = None
@@ -257,8 +321,35 @@ class DemoEngine:
     """Made-up data. Changes are kept in memory so every button does something visible."""
     demo = True
 
+    # ------------------------------------------------------------------ the panel's own updates (pretend)
+    def update_state(self):
+        job = copy.deepcopy(self.update_job)
+        if job["status"] == "working" and time.time() - self.update_started > 2.5:
+            job.update(status="restarting", message="The panel is restarting. This page reconnects by itself.")
+        if job["status"] in ("working", "restarting") and time.time() - self.update_started > 5:
+            self.demo_version = self.demo_latest
+            job.update(status="done", message="Updated.")
+            self.update_job = job
+        return {"current": self.demo_version, "latest": self.demo_latest,
+                "available": self.demo_version != self.demo_latest, "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "check_error": "", "published": "2026-10-19", "last_result": None, "job": job,
+                "notes": "* Made-up release notes for the demo.\n* Faster Overview.\n* WP Updates now lists themes."}
+
+    def update_check(self):
+        return Result(True, "Version %s is available (you have %s)." % (self.demo_latest, self.demo_version)
+                      if self.demo_version != self.demo_latest else "You have the newest version (%s)." % self.demo_version)
+
+    def update_install(self, version):
+        self.update_job = {"status": "working", "message": "Downloading and checking…", "log": ["demo: nothing is installed"],
+                           "target": self.demo_latest}
+        self.update_started = time.time()
+        return Result(True, "Updating to %s." % self.demo_latest)
+
     def __init__(self):
         self._lock = threading.RLock()
+        self.demo_version, self.demo_latest = __version__, "9.9.9"
+        self.update_job = {"status": "idle", "message": "", "log": [], "target": ""}
+        self.update_started = 0.0
         now = datetime.datetime.now()
         fmt = "%Y-%m-%d %H:%M:%S"
         self.blocked_rows = [
@@ -427,6 +518,7 @@ class DemoEngine:
         ]
         problems = sum(1 for r in rows if r["status"] == "bad")
         return {"checked_at": time.strftime("%Y-%m-%d %H:%M:%S"), "problems": problems, "rows": rows,
+                "sites_checking": False, "sites_checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "sites": {"total": 5, "normal": 4, "new_problems": [], "old_problems": [{"domain": "old.example.com", "code": "500"}],
                           "sites": self.sites},
                 "blocked_24h": 37, "waf_mode": self.mode}
@@ -541,12 +633,18 @@ class DemoEngine:
         return copy.deepcopy(self.updates)
 
     def updates_refresh(self):
+        def item(what, slug, kind, now, to, status="active"):
+            return {"what": what, "slug": slug, "from": now, "to": to, "kind": kind, "status": status}
         self.updates = {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S"), "sites": [
             {"site": "shop.example.com", "checked": True, "items": [
-                {"what": "WooCommerce", "from": "10.0.4", "to": "11.2.1", "kind": "plugin"},
-                {"what": "Yoast SEO", "from": "28.2", "to": "28.7", "kind": "plugin"}]},
+                item("WooCommerce", "woocommerce", "plugin", "10.0.4", "11.2.1"),
+                item("Yoast SEO", "wordpress-seo", "plugin", "28.2", "28.7"),
+                item("Bricks", "bricks", "theme", "1.9.8", "1.12.4")]},
             {"site": "blog.example.com", "checked": True, "items": [
-                {"what": "WordPress itself", "from": "", "to": "6.8.11", "kind": "core-minor"}]},
-            {"site": "staging.example.com", "checked": True, "items": []},
+                item("WordPress itself", "", "core-minor", "", "6.8.11"),
+                item("WooCommerce", "woocommerce", "plugin", "10.1.0", "11.2.1"),
+                item("Old gallery plugin", "old-gallery", "plugin", "2.1", "2.4", "inactive")]},
+            {"site": "staging.example.com", "checked": True, "items": [
+                item("Bricks", "bricks", "theme", "1.9.8", "1.12.4", "inactive")]},
             {"site": "example.org", "checked": False, "items": []}]}
         return Result(True, "Started looking for updates.")

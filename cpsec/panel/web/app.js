@@ -49,7 +49,7 @@
   }
 
   // ------------------------------------------------------------------ state, talking to the server
-  const S = { me: null, csrf: '', view: 'overview', problems: 0, drawId: 0, pollTimer: null, twofa: false, more: false, advice: 0 };
+  const S = { me: null, csrf: '', view: 'overview', problems: 0, drawId: 0, pollTimer: null, twofa: false, more: false, advice: 0, update: null };
 
   async function api(path, opts = {}) {
     const init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
@@ -160,7 +160,7 @@
     ['blocked', 'Blocked', 'blocked', 'Blocked', 'Protection', true],
     ['access', 'Admin access', 'access', 'Access', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
-    ['updates', 'Updates', 'updates', 'Updates', 'Protection', false],
+    ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
     ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
     ['settings', 'Settings', 'settings', 'Settings', 'Manage', false],
   ];
@@ -206,13 +206,96 @@
           h('div', { class: 'foot small muted' }, h('div', { text: 'Signed in as ' + S.me.user }),
             S.me.demo ? h('div', { text: 'DEMO – made-up data' }) : null,
             h('div', { class: 'row', style: 'margin-top:.5rem' }, signOut()))),
-        h('main', { class: 'main', id: 'main' }, main)),
+        h('main', { class: 'main', id: 'main' }, versionBar(), main)),
       sheet);
   }
 
   function pageHead(title, sub, ...actions) {
     return h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: title }), sub ? h('div', { class: 'sub', text: sub }) : null),
       h('div', { class: 'right row' }, actions));
+  }
+
+  // ------------------------------------------------------------------ the panel's own version and updates
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // a request that never touches the page: used while the panel restarts and answers nothing or "signed out"
+  async function peek(path) {
+    try {
+      const res = await fetch(path, { credentials: 'same-origin' });
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* not JSON */ }
+      return { status: res.status, data };
+    } catch (e) { return { status: 0, data: {} }; }
+  }
+
+  async function loadUpdate(check) {
+    const r = check ? await api('/api/update/check', { method: 'POST', body: {} }) : await api('/api/update');
+    const state = check ? r.data.state : r.data;
+    if (state && state.current) S.update = state;
+    return r;
+  }
+
+  function versionBar() {
+    const u = S.update;
+    const working = u && u.job && (u.job.status === 'working' || u.job.status === 'restarting');
+    let chip;
+    if (!u || !u.checked_at) chip = badge('not checked yet', '');
+    else if (u.check_error) chip = badge('could not check', 'warn');
+    else if (u.available) chip = badge('update available: v' + u.latest, 'warn');
+    else chip = badge('up to date', 'ok');
+    return h('div', { class: 'versionbar' },
+      h('span', { class: 'ver', text: 'CP-Security v' + ((u && u.current) || S.me.version) }), chip,
+      working ? h('span', { class: 'muted small', text: 'updating…' }) : null,
+      h('button', { class: 'btn small right' + (u && u.available ? ' primary' : ''), type: 'button',
+        text: u && u.available ? 'Update now…' : 'Check for updates', onclick: openUpdate }));
+  }
+
+  async function openUpdate() {
+    const r = await withBusy('Looking for a newer version…', () => loadUpdate(true));
+    const u = S.update;
+    if (!u) { toast((r.data && r.data.message) || 'Could not check.', 'bad'); return; }
+    const failed = u.last_result && u.last_result.ok === false;
+    const content = h('div', { class: 'stack' },
+      h('p', {}, 'You have ', h('strong', { text: 'v' + u.current }),
+        u.available ? [', and ', h('strong', { text: 'v' + u.latest }), ' is available' + (u.published ? ' (published ' + u.published + ')' : '') + '.']
+          : '. This is the newest version.'),
+      u.check_error ? h('p', { class: 'error', text: u.check_error }) : null,
+      failed ? h('div', { class: 'note warn', text: 'The last update (' + u.last_result.version + ', ' + u.last_result.when + ') did not start, so the old version was put back automatically.' }) : null,
+      u.available && u.notes ? [h('p', { class: 'muted small', text: 'What is new:' }), h('pre', { class: 'log', text: u.notes })] : null,
+      u.available ? h('p', { class: 'muted small', text: 'The panel restarts for a few seconds and you sign in again. The download is checked against its published fingerprint and tested before it is switched on; if the new version does not start, the old one comes back by itself. Your protection keeps running during the update.' }) : null);
+    const go = await dialog({ title: u.available ? 'Update CP-Security?' : 'CP-Security is up to date', content,
+      ok: u.available ? 'Update to v' + u.latest : 'Close', cancel: u.available ? 'Not now' : '' });
+    if (go && u.available) await runUpdate(u.latest);
+    else if (go !== undefined) redraw();
+  }
+
+  async function runUpdate(target) {
+    const r = await api('/api/update/install', { method: 'POST', body: { version: target, confirm: true } });
+    if (!r.data.ok) { toast(r.data.message, 'bad'); return; }
+    const text = $('#busy-text');
+    $('#busy').hidden = false;
+    text.textContent = 'Starting the update…';
+    const started = Date.now();
+    let restarting = false;
+    while (Date.now() - started < 180000) {
+      await sleep(1500);
+      const s = await peek('/api/update');
+      if (s.status === 200 && s.data.job) {
+        text.textContent = s.data.job.message || 'Working…';
+        if (s.data.job.status === 'failed') { $('#busy').hidden = true; toast(s.data.job.message, 'bad'); await loadUpdate(false); redraw(); return; }
+        if (s.data.job.status === 'done') { $('#busy').hidden = true; S.update = s.data; toast('Updated to v' + target + '.', 'ok'); redraw(); return; }
+        if (s.data.job.status === 'restarting') restarting = true;
+      } else {
+        restarting = true;                               // no answer, or signed out: the panel is restarting
+      }
+      if (restarting) {
+        text.textContent = 'The panel is restarting…';
+        const me = await peek('/api/me');
+        if (me.status === 200 && me.data.version === target) { location.reload(); return; }
+      }
+    }
+    $('#busy').hidden = true;
+    toast('The panel did not come back with the new version. It goes back to the old one by itself: reload this page in a minute.', 'bad');
   }
 
   // ------------------------------------------------------------------ overview
@@ -222,6 +305,8 @@
     const ok = S.problems === 0;
     const sites = data.sites || { sites: [], new_problems: [], old_problems: [] };
     const sorted = sites.sites.slice().sort((a, b) => Number(a.ok) - Number(b.ok) || a.domain.localeCompare(b.domain));
+    // the websites are asked in the background (it takes several seconds): look again until the answers are in
+    if (data.sites_checking) setTimeout(() => { if (S.view === 'overview') softRedraw(); }, 2500);
     // the advice is gathered in the background so the page itself appears at once
     const teaser = h('div', {});
     api('/api/advisor').then(({ data: a }) => {
@@ -246,18 +331,20 @@
       h('div', { class: 'grid tiles' },
         tile('Blocked in the last 24 hours', data.blocked_24h),
         tile('Web firewall', data.waf_mode ? MODES[data.waf_mode] : 'Not set up'),
-        tile('Websites answering', sites.normal + ' of ' + sites.total)),
+        tile('Websites answering', data.sites_pending ? 'checking…' : sites.normal + ' of ' + sites.total)),
       h('div', { class: 'grid' }, data.rows.map(r =>
         h('div', { class: 'card status-row' }, h('span', { class: 'dot-s ' + r.status, 'aria-hidden': 'true' }),
           h('div', {}, h('div', { class: 'what', text: r.label }), h('div', { class: 'text', text: r.text }))))),
       h('section', { class: 'card flush' },
         h('div', { class: 'card-head' }, h('h2', { text: 'Websites' }),
-          sites.new_problems.length ? badge(sites.new_problems.length + ' new problem' + (sites.new_problems.length > 1 ? 's' : ''), 'bad') : badge('no new problems', 'ok')),
+          data.sites_pending ? badge('checking…', '') : sites.new_problems.length ? badge(sites.new_problems.length + ' new problem' + (sites.new_problems.length > 1 ? 's' : ''), 'bad') : badge('no new problems', 'ok'),
+          data.sites_checking && !data.sites_pending ? badge('refreshing…', '') : null,
+          data.sites_checked_at ? h('span', { class: 'muted small right', text: 'Last asked ' + data.sites_checked_at }) : null),
         table(['Website', 'Answer'], sorted.map(s => {
           const old = sites.old_problems.some(o => o.domain === s.domain);
           return h('tr', {}, h('td', { class: 'mono', text: s.domain }),
             h('td', {}, badge(s.code === '000' ? 'no answer' : s.code, s.ok ? 'ok' : 'bad'), old ? h('span', { class: 'muted small', text: '  already like this before' }) : null));
-        }), 'No websites found.')));
+        }), data.sites_pending ? 'Asking every website… this takes a few seconds.' : 'No websites found.')));
   }
 
   // ------------------------------------------------------------------ blocked
@@ -433,20 +520,44 @@
       h('div', { class: 'note', text: 'Pages that LiteSpeed serves from its cache are not checked. Every change restarts the web server gracefully and is undone automatically if a website stops answering.' }));
   }
 
-  // ------------------------------------------------------------------ updates
+  // ------------------------------------------------------------------ WP updates (WordPress, plugins, themes)
+  const KIND = { plugin: ['Plugin', 'brand'], theme: ['Theme', 'warn'] };
+  const kindBadge = k => k.startsWith('core') ? badge('WordPress', 'bad') : badge(KIND[k][0], KIND[k][1]);
+
   function renderUpdates(state) {
     const sites = state.sites || [];
     const withItems = sites.filter(s => s.items.length);
     const unchecked = sites.filter(s => !s.checked);
-    if (state.status === 'running') return card(null, h('div', { class: 'row' }, h('div', { class: 'spinner', style: 'margin:0' }), h('span', { text: 'Looking at every WordPress site… this takes a minute.' })));
-    if (state.status === 'idle') return card(null, h('p', { class: 'muted', text: 'Press "Look for updates" to see which sites are behind.' }));
+    if (state.status === 'running') return card(null, h('div', { class: 'row' }, h('div', { class: 'spinner', style: 'margin:0' }), h('span', { text: 'Looking at every WordPress site… this takes about a minute.' })));
+    if (state.status === 'idle') return card(null, h('p', { class: 'muted', text: 'Press "Look for updates" to see which websites have plugins, themes or WordPress itself waiting for an update.' }));
     if (state.status === 'failed') return card(null, h('p', { class: 'error', text: 'Looking failed: ' + (state.error || 'unknown reason') }));
+
+    const all = withItems.flatMap(s => s.items.map(i => Object.assign({ site: s.site }, i)));
+    const count = test => all.filter(test).length;
+    const plugins = count(i => i.kind === 'plugin'), themes = count(i => i.kind === 'theme'), core = count(i => i.kind.startsWith('core'));
+    // the same plugin or theme waiting on several websites: update them together
+    const groups = {};
+    all.forEach(i => {
+      const key = i.kind + ':' + (i.slug || i.what);
+      (groups[key] = groups[key] || { kind: i.kind, what: i.what, to: i.to, sites: [] }).sites.push(i.site);
+    });
+    const shared = Object.values(groups).filter(g => g.sites.length > 1).sort((a, b) => b.sites.length - a.sites.length);
+
     return h('div', { class: 'stack' },
       h('div', { class: 'banner ' + (withItems.length ? 'warn' : 'ok') }, icon(withItems.length ? 'alert' : 'check'),
-        h('div', {}, h('div', { text: withItems.length ? withItems.length + ' site(s) have updates waiting' : 'No updates are waiting' }), h('div', { class: 'sub', text: 'Looked ' + state.finished }))),
-      withItems.map(s => h('section', { class: 'card flush' }, h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn')),
-        table(['What', 'From', 'To'], s.items.map(i => h('tr', {}, h('td', { text: i.what }), h('td', { class: 'mono', text: i.from || '–' }),
-          h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null))), ''))),
+        h('div', {}, h('div', { text: withItems.length ? all.length + ' update' + (all.length > 1 ? 's' : '') + ' waiting on ' + withItems.length + ' website' + (withItems.length > 1 ? 's' : '') : 'No updates are waiting' }),
+          h('div', { class: 'sub', text: 'Looked ' + state.finished }))),
+      withItems.length ? h('div', { class: 'grid tiles' }, tile('Websites affected', withItems.length), tile('Plugins', plugins), tile('Themes', themes), tile('WordPress itself', core)) : null,
+      shared.length ? h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: 'The same update on several websites' }), h('span', { class: 'muted small right', text: 'Update these together.' })),
+        table(['What', 'Type', 'New version', 'Websites'], shared.map(g => h('tr', {}, h('td', { text: g.what }), h('td', {}, kindBadge(g.kind)),
+          h('td', { class: 'mono', text: g.to }), h('td', { class: 'small', text: g.sites.length + ': ' + g.sites.sort().join(', ') }))), '')) : null,
+      withItems.map(s => h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn')),
+        table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', {},
+          h('td', {}, kindBadge(i.kind)), h('td', { text: i.what }), h('td', { class: 'mono', text: i.from || '–' }),
+          h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null),
+          h('td', {}, i.status === 'inactive' ? badge('switched off', '') : null))), ''))),
       unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null);
   }
 
@@ -473,9 +584,9 @@
     });
     if (state.status === 'running') { button.disabled = true; poll(); }
     return h('div', { class: 'stack' },
-      pageHead('Updates waiting', 'WordPress, plugins and themes that are behind. This page only looks – it never installs anything.', button),
+      pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. This page only looks – it never installs anything.', button),
       holder,
-      h('div', { class: 'note', text: 'Update from each site\'s WordPress dashboard (Dashboard → Updates), one site at a time, and look at the site afterwards. Security updates matter most.' }));
+      h('div', { class: 'note', text: 'Update from each website\'s WordPress dashboard (Dashboard → Updates), one website at a time, and look at the website afterwards. Security updates matter most. A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it.' }));
   }
 
   // ------------------------------------------------------------------ settings
@@ -747,10 +858,21 @@
   }
   const redraw = refresh => draw(refresh === true);
 
+  // refresh the page content without the "Loading…" flash (used while something finishes in the background)
+  async function softRedraw() {
+    const id = S.drawId;
+    let content;
+    try { content = await VIEWS[S.view](false); } catch (e) { return; }
+    const main = $('#main');
+    if (id !== S.drawId || !S.me || !main) return;
+    main.replaceChildren(versionBar(), content);
+  }
+
   async function boot() {
     const { data } = await api('/api/me');
     S.twofa = !!data.twofa;
     if (data.authenticated) { S.me = data; S.csrf = data.csrf; } else { S.me = null; }
+    if (S.me) await loadUpdate(false);
     draw();
   }
 

@@ -758,6 +758,33 @@ class Runner:
             self.job["finished"] = self._clock("%Y-%m-%d %H:%M:%S")
 
 
+def refresh_after_update():
+    """After new program files are in place: bring the files in the system that depend on them up to date.
+
+    Only things this tool already installed are touched: its service files, and its blocker filters and jails.
+    Returns a list of plain sentences about what was refreshed."""
+    p = config.P
+    done = []
+    wanted = (
+        (SERVICE_FEED, UNIT_FEED.format(install_dir=p.install_dir, python=python_path())),
+        (SERVICE_PANEL, UNIT_PANEL.format(install_dir=p.install_dir, python=python_path())),
+        (SERVICE_LOCK, UNIT_LOCK.format(nft=nft_path(), nft_file=p.nft_file, table=access.TABLE)),
+    )
+    changed = False
+    for name, text in wanted:
+        path = p.systemd_dir + "/" + name
+        if os.path.exists(path) and util.read_text(path) != text:
+            util.atomic_write(path, text, 0o644)
+            done.append("service file " + name)
+            changed = True
+    if changed:
+        util.run(["systemctl", "daemon-reload"])
+    if blocker.installed() and os.path.exists(p.f2b_jails):
+        res = blocker.write_config()
+        done.append("blocker settings" if res.ok else "blocker settings (%s)" % res.message)
+    return done
+
+
 # ----------------------------------------------------------------------------- the panel's own service
 def install_panel_service():
     """Write and start the panel's system service (the installer calls this once the login exists)."""

@@ -1,4 +1,5 @@
 import json
+import threading
 
 from cpsec import config, settings
 from cpsec.panel import auth
@@ -474,3 +475,120 @@ class LiveDataRoutes(PanelCase):
             resp, data = self.request("POST", path, body)
             self.assertIn(resp.status, (200, 400, 409), "%s -> %s %s" % (path, resp.status, data))
             self.assertIn("ok", data)
+
+
+class TheOverviewDoesNotWait(PanelCase):
+    """Asking all websites takes seconds: the page must appear at once and the answers arrive in the background."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None,
+                       clock=lambda: self.now[0])
+        self.patch("cpsec.blocker.installed", return_value=False)
+        self.gate = threading.Event()
+        self.asked = []
+
+        def slow_check(domains=None):
+            self.asked.append(1)
+            self.gate.wait(10)
+            return [("a.example.com", "200"), ("b.example.com", "500")]
+        self.patch("cpsec.sites.check_sites", side_effect=slow_check)
+        self.login()
+
+    def tearDown(self):
+        self.gate.set()
+        super().tearDown()
+
+    def test_the_first_page_comes_back_while_the_websites_are_still_being_asked(self):
+        import time
+        started = time.time()
+        resp, data = self.request("GET", "/api/overview")
+        self.assertLess(time.time() - started, 3, "must not wait for the websites")
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(data["sites_pending"])
+        self.assertTrue(data["sites_checking"])
+        row = [r for r in data["rows"] if r["key"] == "sites"][0]
+        self.assertIn("Checking", row["text"])
+
+    def test_when_the_answers_are_in_they_show_up(self):
+        self.request("GET", "/api/overview")
+        self.gate.set()
+        for _ in range(100):
+            _, data = self.request("GET", "/api/overview")
+            if not data["sites_checking"] and not data["sites_pending"]:
+                break
+            import time
+            time.sleep(0.05)
+        self.assertFalse(data["sites_pending"])
+        self.assertEqual(data["sites"]["total"], 2)
+        self.assertTrue(data["sites_checked_at"])
+
+    def test_asking_again_shows_the_old_answers_at_once_and_refreshes_behind_them(self):
+        # the new check stays blocked on purpose, so the old answers are the only ones that can be shown
+        self.engine._site_results = [("a.example.com", "200")]
+        self.engine._site_checked_at = 1.0
+        resp, data = self.request("GET", "/api/overview?refresh=1")
+        self.assertFalse(data["sites_pending"], "the old answers are shown, not a blank page")
+        self.assertEqual(data["sites"]["total"], 1)
+        self.assertGreaterEqual(len(self.asked), 1, "a new check was started")
+
+    def test_one_slow_check_does_not_start_a_second_one(self):
+        self.request("GET", "/api/overview")
+        self.request("GET", "/api/overview?refresh=1")
+        self.request("GET", "/api/overview?refresh=1")
+        self.assertEqual(len(self.asked), 1)
+
+    def test_a_failing_check_never_takes_the_panel_down(self):
+        self.gate.set()
+        self.patch("cpsec.sites.check_sites", side_effect=RuntimeError("boom"))
+        self.engine._check_sites_now()
+        resp, data = self.request("GET", "/api/overview")
+        self.assertEqual(resp.status, 200)
+
+    def test_the_advice_and_the_overview_do_not_block_each_other(self):
+        import time
+        self.engine._advice_lock.acquire()
+        try:
+            started = time.time()
+            resp, _ = self.request("GET", "/api/overview")
+            self.assertEqual(resp.status, 200)
+            self.assertLess(time.time() - started, 3)
+        finally:
+            self.engine._advice_lock.release()
+
+
+class PanelUpdateRoutes(PanelCase):
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def test_the_state_tells_the_page_what_to_show(self):
+        resp, data = self.request("GET", "/api/update")
+        self.assertEqual(resp.status, 200)
+        for key in ("current", "latest", "available", "notes", "job"):
+            self.assertIn(key, data)
+
+    def test_checking_returns_the_new_state_too(self):
+        resp, data = self.request("POST", "/api/update/check", {})
+        self.assertTrue(data["ok"])
+        self.assertIn("available", data["state"])
+
+    def test_installing_needs_an_explicit_yes_and_the_secret_token(self):
+        self.assertEqual(self.request("POST", "/api/update/install", {"version": "9.9.9"})[0].status, 400)
+        self.csrf = ""
+        self.assertEqual(self.request("POST", "/api/update/install", {"version": "9.9.9", "confirm": True})[0].status, 403)
+
+    def test_installing_runs_and_is_written_to_the_activity_log(self):
+        resp, data = self.request("POST", "/api/update/install", {"version": "9.9.9", "confirm": True})
+        self.assertTrue(data["ok"], data)
+        _, state = self.request("GET", "/api/update")
+        self.assertIn(state["job"]["status"], ("working", "restarting", "done"))
+        _, log = self.request("GET", "/api/activity")
+        self.assertTrue(any(e["event"] == "UPDATE_INSTALL" for e in log["events"]))
+
+    def test_the_version_is_known_to_the_page_from_the_start(self):
+        _, me = self.request("GET", "/api/me")
+        from cpsec import __version__
+        self.assertEqual(me["version"], __version__)

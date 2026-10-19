@@ -139,7 +139,9 @@ def cmd_run(args):
     if not settings.get_user():
         print("No login exists yet. Run: security panel setup")
         return 1
-    server, (cert, key) = _build_server(args, LiveEngine(), secure=not args.insecure)
+    engine = LiveEngine()
+    server, (cert, key) = _build_server(args, engine, secure=not args.insecure)
+    engine.warm_up()
 
     def reload_cert(*_):
         try:

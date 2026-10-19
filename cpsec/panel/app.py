@@ -132,6 +132,9 @@ class App:
             ("POST", "/api/firewall/mode"): (self.api_waf_mode, True),
             ("POST", "/api/firewall/exception"): (self.api_waf_exception_add, True),
             ("POST", "/api/firewall/exception/remove"): (self.api_waf_exception_remove, True),
+            ("GET", "/api/update"): (self.api_update, True),
+            ("POST", "/api/update/check"): (self.api_update_check, True),
+            ("POST", "/api/update/install"): (self.api_update_install, True),
             ("GET", "/api/updates"): (self.api_updates, True),
             ("POST", "/api/updates/refresh"): (self.api_updates_refresh, True),
             ("GET", "/api/settings"): (self.api_settings, True),
@@ -421,7 +424,25 @@ class App:
         activity.write("FIREWALL_EXCEPTION_REMOVED", ip=req.ip, ok=res.ok)
         return _result(res)
 
-    # ------------------------------------------------------------------ updates
+    # ------------------------------------------------------------------ the panel's own updates
+    def api_update(self, req, session):
+        return _json(200, self.engine.update_state())
+
+    def api_update_check(self, req, session):
+        res = self.engine.update_check()
+        activity.write("UPDATE_CHECK", ip=req.ip, ok=res.ok)
+        return _result(res, state=self.engine.update_state())
+
+    def api_update_install(self, req, session):
+        b = req.json()
+        if b.get("confirm") is not True:
+            return _json(400, {"ok": False, "code": "needs_confirm", "message": "Please confirm the update."})
+        version = _text(b.get("version"), 20)
+        res = self.engine.update_install(version)
+        activity.write("UPDATE_INSTALL", ip=req.ip, version=version, ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ WordPress updates
     def api_updates(self, req, session):
         return _json(200, self.engine.updates_state())
 

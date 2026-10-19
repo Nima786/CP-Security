@@ -21,7 +21,7 @@ def check_site(domain):
 
 def check_sites(domains=None):
     domains = list_sites() if domains is None else domains
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=12) as ex:
         return list(ex.map(check_site, domains))
 
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+* **Update from the panel.** The version number is shown at the top of every page with "up to date" or "update
+  available". "Check for updates" asks GitHub; "Update now" downloads the release, checks its fingerprint, tests the new
+  program files, switches to them and restarts the panel. If the new version does not start, a helper started by
+  systemd puts the old one back by itself. The same from the terminal: `security update`.
+* **WP Updates** (was "Updates"): lists plugins, themes and WordPress itself, website by website, with the version now
+  and the version it goes to, whether the plugin is switched off, and which updates are waiting on several websites at once.
+* **Faster Overview.** The page appears at once; the websites are asked in the background (every 5 minutes, or
+  with "Check again") instead of making you wait 4 to 10 seconds.
+* After an update the system files that depend on the program (service files, blocker filters) are refreshed too.
+
 ## 0.2.2
 Found by checking the first real installation:
 * **Fix:** the WordPress login watcher read no logins at all, because CyberPanel's LiteSpeed writes the request without
