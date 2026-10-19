@@ -1,0 +1,48 @@
+name: Release
+
+# Push a tag like v0.2.0 and this builds the numbered files, checks them and publishes them.
+# The install command points at these files, which never change once published.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag must match the VERSION file
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "$file" ]; then echo "tag v$tag does not match VERSION $file"; exit 1; fi
+      - name: Tests
+        run: python -m unittest discover -s tests -t .
+      - name: Shell scripts are valid
+        run: sh -n install.sh && sh -n uninstall.sh
+      - name: Build the release files
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          git archive --format=tar.gz --prefix="cp-security-$v/" -o "dist/cp-security-$v.tar.gz" HEAD
+          # put the real version number into the published install script (only the line that starts with VERSION=)
+          sed "s/^VERSION=\"@@VERSION@@\"/VERSION=\"$v\"/" install.sh > dist/install.sh
+          grep -q "^VERSION=\"$v\"" dist/install.sh
+          sh -n dist/install.sh
+          cp uninstall.sh dist/uninstall.sh
+          (cd dist && sha256sum "cp-security-$v.tar.gz" install.sh uninstall.sh > SHA256SUMS)
+          # the notes are this version's section of the changelog
+          awk -v v="$v" '$0 ~ "^## " v {f=1; next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release $v" > notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" dist/* --title "CP-Security $v" --notes-file notes.md --verify-tag

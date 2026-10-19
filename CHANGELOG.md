@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 – unreleased
+## 0.2.0
 * **OpenLiteSpeed** support next to LiteSpeed Enterprise (one hook line in each server's own file; CyberPanel's
   files are otherwise untouched). Tested against pretend file trees only so far.
 * **Advisor**: notices CyberPanel's own ModSecurity rules, Imunify, CSF/LFD, other fail2ban jails, Cloudflare,
@@ -12,6 +12,9 @@
 * New panel pages: Advisor, Setup. Settings gained attack-blocker numbers, never-block list, saved baseline.
 * Web firewall: self-test, own settings folder, no clash with CyberPanel's rule packs.
 * Login watcher service (copies failed WordPress logins for the blocker), included in the repository.
+* Numbered releases: the installer downloads a release (not the main branch) and verifies its checksum.
+* CyberPanel's own rule pack, when installed but switched off, is set aside (reversibly) instead of blocking the web firewall.
+* The earlier hand-made setup's trusted addresses, lists and lock are taken over.
 
 ## 0.1.0
 * First version of the engine as a library (admin access, attack blocker views, web firewall, sites, updates, health).

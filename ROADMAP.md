@@ -44,7 +44,7 @@ printing, so a terminal menu and a browser panel can share it.
 - ⬜ AlmaLinux / Rocky check (log paths, dnf packages, firewalld)
 - ⬜ WordPress exclusion rules for the web firewall (fewer false alarms in wp-admin)
 
-## M6 – Hardening and release ⬜
-- ⬜ Update from the panel (pull a release, verify, restart)
-- ⬜ Release workflow and checksums
+## M6 – Hardening and release 🚧
+- ✅ Release workflow: a tag like `v0.2.0` builds the files, runs the tests and publishes them with checksums; the installer uses only these
+- ⬜ Update from the panel (fetch the newest release, verify its checksum, restart)
 - ⬜ Security review of the panel (headers, input validation, privilege separation)

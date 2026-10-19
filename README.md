@@ -29,8 +29,12 @@ CyberPanel server and managed from a browser without touching a terminal.
 On the server, as root:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/Nima786/CP-Security/main/install.sh | sh
+curl -fsSL https://github.com/Nima786/CP-Security/releases/latest/download/install.sh | sh
 ```
+
+This installs the newest **numbered release** (never whatever happens to be on the main branch) and checks the
+download against the release's published fingerprint. To install one fixed version, use that release's own
+address, for example `.../releases/download/v0.2.0/install.sh`.
 
 It asks for a **sub-domain** (for example `security.example.com`, with a DNS record pointing to the server),
 a **port**, an **email address** for Let's Encrypt, a **username and password**, and which **addresses are
