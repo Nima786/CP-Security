@@ -18,7 +18,14 @@ similar server and managed without touching a terminal.
 
 * **Terminal menu** – type `security` on the server. Numbered, plain-English, everything undoable.
 * **Browser panel** – the same things with buttons, on your own sub-domain and port with a Let's Encrypt
-  certificate, protected by a password and a 6-digit code. *(in progress, see [ROADMAP.md](ROADMAP.md))*
+  certificate, protected by a password and a 6-digit code. The panel itself is finished; the installer that
+  sets up the sub-domain, certificate and service is the next step (see [ROADMAP.md](ROADMAP.md)).
+
+Try the panel on any computer with made-up data (nothing on the machine is touched):
+
+```
+python -m cpsec panel demo        # then open http://127.0.0.1:8765
+```
 
 ## Status
 

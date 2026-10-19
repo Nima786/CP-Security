@@ -1,4 +1,9 @@
-"""Panel settings that the engine also needs to know (which port, who may reach it)."""
+"""Panel settings (which sub-domain and port, who may reach it) and the panel's one admin user.
+
+Everything is in one root-only file, /etc/cp-security/panel.json. The engine only needs the settings part.
+"""
+import threading
+
 from . import config, util
 
 DEFAULTS = {
@@ -9,14 +14,42 @@ DEFAULTS = {
     "access": "login",
 }
 
+_lock = threading.Lock()
+
+
+def _load_all():
+    return util.read_json(config.P.panel_settings, {})
+
 
 def load():
     data = dict(DEFAULTS)
-    stored = util.read_json(config.P.panel_settings, {})
+    stored = _load_all()
     for key in DEFAULTS:
         if key in stored:
             data[key] = stored[key]
     return data
+
+
+def save(changes):
+    """Merge changes into the settings file (the user record is kept)."""
+    with _lock:
+        stored = _load_all()
+        for key, value in changes.items():
+            if key in DEFAULTS:
+                stored[key] = value
+        util.write_json(config.P.panel_settings, stored, mode=0o600)
+
+
+def get_user():
+    """The panel's admin: {'name', 'password_hash', 'totp_secret', 'last_counter'} or None."""
+    return _load_all().get("user")
+
+
+def save_user(user):
+    with _lock:
+        stored = _load_all()
+        stored["user"] = user
+        util.write_json(config.P.panel_settings, stored, mode=0o600)
 
 
 def lock_ports():
