@@ -1,4 +1,4 @@
-import json
+﻿import json
 
 from cpsec import config, settings
 from cpsec.panel import auth
@@ -11,12 +11,16 @@ HOST = "panel.example.com"
 
 
 class PanelCase(EnvTestCase):
+    twofa = False                       # most tests use the plain username + password login
+
     def setUp(self):
         super().setUp()
         self.secret = auth.new_totp_secret()
         settings.save({"domain": HOST, "port": 9443, "access": "login"})
-        settings.save_user({"name": "admin", "password_hash": auth.hash_password(PASSWORD, n=16),
-                            "totp_secret": self.secret, "last_counter": 0})
+        user = {"name": "admin", "password_hash": auth.hash_password(PASSWORD, n=16), "totp_enabled": self.twofa, "last_counter": 0}
+        if self.twofa:
+            user["totp_secret"] = self.secret
+        settings.save_user(user)
         self.now = [1_700_000_000.0]
         self.engine = DemoEngine()
         self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None,
@@ -46,8 +50,10 @@ class PanelCase(EnvTestCase):
         return auth.totp_now(self.secret, now=self.now[0])
 
     def login(self, ip="45.60.0.10"):
-        resp, data = self.request("POST", "/api/login",
-                                  {"username": "admin", "password": PASSWORD, "code": self.code()}, ip=ip)
+        body = {"username": "admin", "password": PASSWORD}
+        if self.twofa:
+            body["code"] = self.code()
+        resp, data = self.request("POST", "/api/login", body, ip=ip)
         self.assertEqual(resp.status, 200, data)
         self.cookie = dict(resp.headers)["Set-Cookie"].split(";")[0]
         self.csrf = data["csrf"]
@@ -136,18 +142,16 @@ class SigningIn(PanelCase):
         self.assertFalse(data["authenticated"])
         self.assertNotIn("csrf", data)
 
-    def test_wrong_password_username_or_code_all_look_the_same(self):
-        good = {"username": "admin", "password": PASSWORD, "code": self.code()}
-        for change in ({"password": "wrong wrong wrong"}, {"username": "root"}, {"code": "000000"}, {"code": ""}):
+    def test_a_wrong_username_or_password_look_the_same(self):
+        good = {"username": "admin", "password": PASSWORD}
+        for change in ({"password": "wrong wrong wrong"}, {"username": "root"}, {"password": ""}, {"username": "ADMIN"}):
             resp, data = self.request("POST", "/api/login", dict(good, **change))
             self.assertEqual(resp.status, 401)
-            self.assertEqual(data["message"], "Wrong username, password or code.")
+            self.assertEqual(data["message"], "Wrong username or password.")
 
-    def test_a_code_cannot_be_used_twice(self):
-        code = self.code()
-        body = {"username": "admin", "password": PASSWORD, "code": code}
-        self.assertEqual(self.request("POST", "/api/login", body)[0].status, 200)
-        self.assertEqual(self.request("POST", "/api/login", body)[0].status, 401)
+    def test_no_code_is_asked_for_unless_the_owner_turned_it_on(self):
+        self.assertFalse(self.request("GET", "/api/me")[1]["twofa"])
+        self.assertEqual(self.request("POST", "/api/login", {"username": "admin", "password": PASSWORD})[0].status, 200)
 
     def test_five_wrong_tries_lock_the_address_out_and_are_logged_for_the_blocker(self):
         bad = {"username": "admin", "password": "nope nope nope", "code": "123456"}
@@ -158,7 +162,7 @@ class SigningIn(PanelCase):
         self.assertEqual(data["code"], "locked")
         self.assertIn("Retry-After", dict(resp.headers))
         # even the right answers are refused while locked
-        good = {"username": "admin", "password": PASSWORD, "code": self.code()}
+        good = {"username": "admin", "password": PASSWORD}
         self.assertEqual(self.request("POST", "/api/login", good, ip="9.9.9.9")[0].status, 429)
         self.assertEqual(self.request("POST", "/api/login", good, ip="45.60.0.10")[0].status, 200)
         log = self.read(config.P.panel_log)
@@ -179,6 +183,28 @@ class SigningIn(PanelCase):
         self.login()
         self.now[0] += 1900
         self.assertEqual(self.request("GET", "/api/overview")[0].status, 401)
+
+
+class TwoStepLogin(PanelCase):
+    twofa = True
+
+    def test_the_login_page_learns_that_a_code_is_needed(self):
+        self.assertTrue(self.request("GET", "/api/me")[1]["twofa"])
+
+    def test_the_password_alone_is_not_enough(self):
+        resp, data = self.request("POST", "/api/login", {"username": "admin", "password": PASSWORD})
+        self.assertEqual((resp.status, data["message"]), (401, "Wrong username, password or code."))
+        resp, data = self.request("POST", "/api/login", {"username": "admin", "password": PASSWORD, "code": "000000"})
+        self.assertEqual(resp.status, 401)
+
+    def test_a_code_cannot_be_used_twice(self):
+        body = {"username": "admin", "password": PASSWORD, "code": self.code()}
+        self.assertEqual(self.request("POST", "/api/login", body)[0].status, 200)
+        self.assertEqual(self.request("POST", "/api/login", body)[0].status, 401)
+
+    def test_a_good_code_signs_in(self):
+        self.login()
+        self.assertTrue(self.request("GET", "/api/me")[1]["authenticated"])
 
 
 class ChangingThings(PanelCase):
@@ -293,16 +319,20 @@ class Settings(PanelCase):
         resp, data = self.request("POST", "/api/settings/access", {"access": "trusted"}, ip="45.60.0.10")
         self.assertTrue(data["ok"], data)
 
-    def test_new_authenticator_key(self):
+    def test_turning_the_optional_code_on_and_off(self):
         resp, data = self.request("POST", "/api/settings/2fa/start", {"password": "wrong wrong wrong"})
         self.assertEqual(data["code"], "bad_password")
         resp, data = self.request("POST", "/api/settings/2fa/start", {"password": PASSWORD})
         new_secret = data["secret"]
         self.assertTrue(data["uri"].startswith("otpauth://"))
-        self.assertEqual(settings.get_user()["totp_secret"], self.secret, "nothing changes until confirmed")
+        self.assertFalse(settings.get_user().get("totp_enabled"), "nothing changes until confirmed")
         self.assertEqual(self.request("POST", "/api/settings/2fa/confirm", {"code": "000000"})[1]["code"], "bad_code")
         self.now[0] += 30
         code = auth.totp_now(new_secret, now=self.now[0])
         self.assertTrue(self.request("POST", "/api/settings/2fa/confirm", {"code": code})[1]["ok"])
-        self.assertEqual(settings.get_user()["totp_secret"], new_secret)
+        self.assertTrue(settings.get_user()["totp_enabled"])
         self.assertEqual(self.request("POST", "/api/settings/2fa/confirm", {"code": code})[1]["code"], "no_pending")
+        self.assertEqual(self.request("POST", "/api/settings/2fa/disable", {"password": "nope nope nope"})[1]["code"], "bad_password")
+        self.assertTrue(self.request("POST", "/api/settings/2fa/disable", {"password": PASSWORD})[1]["ok"])
+        self.assertFalse(settings.get_user()["totp_enabled"])
+        self.assertNotIn("totp_secret", settings.get_user())

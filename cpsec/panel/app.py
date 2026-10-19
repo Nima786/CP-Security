@@ -129,6 +129,7 @@ class App:
             ("POST", "/api/settings/access"): (self.api_settings_access, True),
             ("POST", "/api/settings/2fa/start"): (self.api_2fa_start, True),
             ("POST", "/api/settings/2fa/confirm"): (self.api_2fa_confirm, True),
+            ("POST", "/api/settings/2fa/disable"): (self.api_2fa_disable, True),
             ("GET", "/api/activity"): (self.api_activity, True),
         }
 
@@ -221,21 +222,28 @@ class App:
         body = req.json()
         username, password, code = _text(body.get("username"), 60), str(body.get("password") or "")[:200], _text(body.get("code"), 12)
         user = settings.get_user()
-        counter = None
+        twofa = bool(user and user.get("totp_enabled") and user.get("totp_secret"))
+        counter, ok = None, False
         if user:
             pw_ok = auth.verify_password(password, user["password_hash"])
             name_ok = hmac.compare_digest(username.encode(), user["name"].encode())
             if pw_ok and name_ok:
-                counter = auth.verify_totp(user["totp_secret"], code, user.get("last_counter", 0), now=self.clock())
+                if twofa:                                   # the second step is only asked when the owner turned it on
+                    counter = auth.verify_totp(user["totp_secret"], code, user.get("last_counter", 0), now=self.clock())
+                    ok = counter is not None
+                else:
+                    ok = True
         else:
             auth.verify_password(password, self._dummy())      # same effort whether or not the user exists
-        if counter is None:
+        if not ok:
             self.limiter.failed(req.ip)
             activity.write("LOGIN_FAILED", ip=req.ip, user=username[:30])
             self.sleep(0.5)
-            return _json(401, {"ok": False, "code": "bad_login", "message": "Wrong username, password or code."})
-        user["last_counter"] = counter
-        settings.save_user(user)
+            return _json(401, {"ok": False, "code": "bad_login",
+                               "message": "Wrong username, password or code." if twofa else "Wrong username or password."})
+        if counter is not None:
+            user["last_counter"] = counter
+            settings.save_user(user)
         self.limiter.succeeded(req.ip)
         token, csrf = self.sessions.create(user["name"], req.ip)
         activity.write("LOGIN", ip=req.ip, user=user["name"])
@@ -251,12 +259,14 @@ class App:
         return _json(200, {"ok": True}, [("Set-Cookie", clear)])
 
     def api_me(self, req, session):
+        user = settings.get_user()
+        twofa = bool(user and user.get("totp_enabled") and user.get("totp_secret"))
         if session is None:
-            return _json(200, {"authenticated": False, "version": __version__})
+            return _json(200, {"authenticated": False, "version": __version__, "twofa": twofa})
         s = settings.load()
         return _json(200, {"authenticated": True, "user": session["user"], "csrf": session["csrf"],
                            "client_ip": req.ip, "version": __version__, "demo": bool(self.engine.demo),
-                           "domain": s["domain"], "access": s["access"]})
+                           "domain": s["domain"], "access": s["access"], "twofa": twofa})
 
     # ------------------------------------------------------------------ overview and blocked
     def api_overview(self, req, session):
@@ -416,13 +426,24 @@ class App:
         counter = auth.verify_totp(secret, _text(req.json().get("code"), 12), now=self.clock())
         if counter is None:
             return _json(400, {"ok": False, "code": "bad_code", "message": "That code is not right. Try the next one."})
-        user["totp_secret"], user["last_counter"] = secret, counter
+        user["totp_secret"], user["totp_enabled"], user["last_counter"] = secret, True, counter
         settings.save_user(user)
         with self._pending_lock:
             self._pending_2fa.pop(session["token"], None)
         self.sessions.destroy_all(except_token=session["token"])
-        activity.write("TOTP_CHANGED", ip=req.ip, user=user["name"])
-        return _json(200, {"ok": True, "message": "The new code is active. Other devices were signed out.", "code": ""})
+        activity.write("TOTP_ENABLED", ip=req.ip, user=user["name"])
+        return _json(200, {"ok": True, "message": "Two-step login is on. Other devices were signed out.", "code": ""})
+
+    def api_2fa_disable(self, req, session):
+        user = settings.get_user()
+        if not user or not auth.verify_password(str(req.json().get("password") or ""), user["password_hash"]):
+            self.sleep(0.5)
+            return _json(400, {"ok": False, "code": "bad_password", "message": "The password is not right."})
+        user["totp_enabled"] = False
+        user.pop("totp_secret", None)
+        settings.save_user(user)
+        activity.write("TOTP_DISABLED", ip=req.ip, user=user["name"])
+        return _json(200, {"ok": True, "message": "Two-step login is off.", "code": ""})
 
     def api_activity(self, req, session):
         return _json(200, {"events": activity.recent(50)})

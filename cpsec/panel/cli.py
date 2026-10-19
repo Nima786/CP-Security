@@ -1,7 +1,6 @@
-"""`security panel ...`: set the panel up, run it, and recover from a lost password or phone."""
+"""`security panel ...`: set the panel up, run it, and recover from a lost password."""
 import argparse
 import getpass
-import os
 import signal
 import sys
 import tempfile
@@ -12,10 +11,10 @@ from . import auth
 HELP = """security panel  -  the browser panel
 
   security panel setup --domain panel.example.com --port 9443
-                       create the admin login (asks for a password, shows the key for your authenticator app)
+                       create the admin login (asks for a username and password)
   security panel run                      run the panel (the system service does this)
   security panel reset-password           choose a new password (use this if you forgot it)
-  security panel reset-2fa                get a new key for your authenticator app (lost phone)
+  security panel disable-2fa              turn the optional two-step login off (lost phone)
   security panel status                   show the panel's settings
   security panel demo                     try the interface with made-up data (nothing on the server is touched)
 """
@@ -49,27 +48,31 @@ def _confirm_totp(secret, username):
 
 
 def cmd_setup(args):
-    if args.domain or args.port:
-        changes = {}
-        if args.domain:
-            changes["domain"] = args.domain.strip().lower()
-        if args.port:
-            changes["port"] = int(args.port)
-        settings.save(changes)
+    changes = {}
+    if args.domain:
+        changes["domain"] = args.domain.strip().lower()
+    if args.port:
+        changes["port"] = int(args.port)
+    changes["access"] = "login" if args.open_login else "trusted"
     existing = settings.get_user()
     if existing and not args.force:
-        print("A login already exists (%s). Use 'reset-password' or 'reset-2fa', or add --force to start over." % existing["name"])
+        print("A login already exists (%s). Use 'reset-password', or add --force to start over." % existing["name"])
         return 1
+    settings.save(changes)
     username = (args.username or input("Choose a username [admin]: ").strip() or "admin")[:40]
     password = _ask_password(username)
-    secret = auth.new_totp_secret()
-    counter = _confirm_totp(secret, username)
-    if counter is None:
-        print("Setup was not finished. Nothing was saved.")
-        return 1
-    settings.save_user({"name": username, "password_hash": auth.hash_password(password),
-                        "totp_secret": secret, "last_counter": counter})
+    user = {"name": username, "password_hash": auth.hash_password(password), "totp_enabled": False, "last_counter": 0}
+    if args.with_2fa:
+        secret = auth.new_totp_secret()
+        counter = _confirm_totp(secret, username)
+        if counter is None:
+            print("Setup was not finished. Nothing was saved.")
+            return 1
+        user.update(totp_secret=secret, totp_enabled=True, last_counter=counter)
+    settings.save_user(user)
     print("\nDone. The login '%s' is ready." % username)
+    if not args.open_login:
+        print("The panel opens only from trusted addresses (add yours with:  security myip YOUR.ADDRESS).")
     return 0
 
 
@@ -84,19 +87,15 @@ def cmd_reset_password(args):
     return 0
 
 
-def cmd_reset_2fa(args):
+def cmd_disable_2fa(args):
     user = settings.get_user()
     if not user:
         print("No login exists yet. Run: security panel setup")
         return 1
-    secret = auth.new_totp_secret()
-    counter = _confirm_totp(secret, user["name"])
-    if counter is None:
-        print("Nothing was changed.")
-        return 1
-    user["totp_secret"], user["last_counter"] = secret, counter
+    user["totp_enabled"] = False
+    user.pop("totp_secret", None)
     settings.save_user(user)
-    print("The new key is active. Restart the panel to sign everybody out:  systemctl restart cp-security-panel")
+    print("Two-step login is off. Restart the panel to sign everybody out:  systemctl restart cp-security-panel")
     return 0
 
 
@@ -106,6 +105,7 @@ def cmd_status(args):
     print("Address:  https://%s:%s" % (s["domain"] or "(not set)", s["port"] or "(not set)"))
     print("Reachable by: " + ("everyone with the login" if s["access"] == "login" else "trusted addresses only"))
     print("Login:    " + (user["name"] if user else "(none yet: run 'security panel setup')"))
+    print("Two-step: " + ("on" if user and user.get("totp_enabled") else "off"))
     return 0
 
 
@@ -115,15 +115,13 @@ def _build_server(args, engine, secure):
     s = settings.load()
     hosts = [h for h in [s["domain"]] + (args.allow_host or []) if h]
     app = App(engine, secure_cookies=secure, allowed_hosts=hosts)
-    tls = None
-    if secure:
-        cert, key = args.cert or config.P.tls_dir + "/fullchain.pem", args.key or config.P.tls_dir + "/privkey.pem"
-        tls = make_tls_context(cert, key)
+    cert = args.cert or config.P.tls_dir + "/fullchain.pem"
+    key = args.key or config.P.tls_dir + "/privkey.pem"
     port = args.port or s["port"]
     if not port:
         raise SystemExit("No port is set. Run: security panel setup --domain ... --port ...")
-    return PanelServer((args.host, int(port)), app, tls), (args.cert or config.P.tls_dir + "/fullchain.pem",
-                                                           args.key or config.P.tls_dir + "/privkey.pem")
+    tls = make_tls_context(cert, key) if secure else None
+    return PanelServer((args.host, int(port)), app, tls), (cert, key)
 
 
 def cmd_run(args):
@@ -151,7 +149,7 @@ def cmd_run(args):
     return 0
 
 
-DEMO_USER, DEMO_PASSWORD, DEMO_SECRET = "demo", "demo-password-123", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+DEMO_USER, DEMO_PASSWORD = "demo", "demo-password-123"
 
 
 def cmd_demo(args):
@@ -161,14 +159,12 @@ def cmd_demo(args):
     config.P = config.Paths(tmp)
     settings.save({"domain": "", "port": int(args.port or 8765), "access": "login"})
     settings.save_user({"name": DEMO_USER, "password_hash": auth.hash_password(DEMO_PASSWORD, n=2 ** 12),
-                        "totp_secret": DEMO_SECRET, "last_counter": 0})
+                        "totp_enabled": False, "last_counter": 0})
     args.host = args.host if args.host != "::" else "127.0.0.1"
     args.allow_host = ["127.0.0.1", "localhost"]
     server, _ = _build_server(args, DemoEngine(), secure=False)
     print("Demo panel (made-up data): http://127.0.0.1:%s" % server.server_address[1])
     print("Username: %s   Password: %s" % (DEMO_USER, DEMO_PASSWORD))
-    print("Authenticator key: %s   (or run: python -c \"from cpsec.panel import auth; print(auth.totp_now('%s'))\")"
-          % (DEMO_SECRET, DEMO_SECRET))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -189,11 +185,13 @@ def main(argv):
     parser.add_argument("--cert")
     parser.add_argument("--key")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--open-login", action="store_true", help="let every address reach the login page")
+    parser.add_argument("--with-2fa", action="store_true", help="also set up the optional authenticator code")
     parser.add_argument("--insecure", action="store_true", help="plain HTTP, for testing only")
     parser.add_argument("--allow-host", action="append")
     args = parser.parse_args(argv)
     handlers = {"setup": cmd_setup, "run": cmd_run, "reset-password": cmd_reset_password,
-                "reset-2fa": cmd_reset_2fa, "status": cmd_status, "demo": cmd_demo}
+                "disable-2fa": cmd_disable_2fa, "status": cmd_status, "demo": cmd_demo}
     if args.command not in handlers:
         print(HELP)
         return 1
