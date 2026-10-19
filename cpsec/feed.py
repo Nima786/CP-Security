@@ -22,7 +22,8 @@ import time
 
 from . import config, netinfo
 
-LINE = re.compile(r'^(\S+) \S+ \S+ \[[^\]]+\] "POST /wp-login\.php(?:\?[^ "]*)? HTTP/[\d.]+" (\d{3}) ')
+# The request may or may not be in quotes: CyberPanel's LiteSpeed writes it without, the usual "combined" format with.
+LINE = re.compile(r'^(\S+) \S+ \S+ \[[^\]]+\] "?POST /wp-login\.php(?:\?[^ "]*)? HTTP/[\d.]+"? (\d{3}) ')
 LOG_GLOB = "/home/*/logs/*.access_log"
 POLL_SECONDS = 2.0
 

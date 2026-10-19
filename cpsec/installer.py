@@ -16,7 +16,7 @@ import ssl
 import sys
 import time
 
-from . import __version__, access, config, netinfo, provision, settings, tls, util, webserver
+from . import __version__, access, blocker, config, netinfo, provision, settings, tls, util, webserver
 from .panel import auth
 
 DEFAULT_PORT = 9443
@@ -415,6 +415,7 @@ def uninstall(c, purge=False):
         rc, out = util.run(["fail2ban-client", "-t"], timeout=90)
         if rc == 0:
             util.run(["fail2ban-client", "reload"], timeout=90)
+            blocker.ensure_actions()
         if webserver.hook_present():
             webserver.disconnect()
             shutil.rmtree(p.waf_dir, ignore_errors=True)

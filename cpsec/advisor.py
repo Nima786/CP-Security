@@ -172,6 +172,12 @@ def check_blocker_and_others():
     if names is None:
         return [F("blocker", "bad", "The attack blocker is installed but not running",
                   "", "Start it from the Blocked page.", _page("blocked", "Open Blocked"))]
+    broken = blocker.jails_without_action()
+    if broken:
+        out.append(F("blocker_noaction", "bad", "Some protections notice attackers but cannot block them",
+                     "No ban action is attached to: " + ", ".join(broken) + ". The blocker logs the attackers and does nothing.",
+                     "Restart the blocker with the button. Earlier blocks are restored.",
+                     _action("restart_blocker", "Restart the blocker")))
     ours = [n for n in names if n.startswith("cps-")]
     standard = {"sshd", "dovecot", "pure-ftpd", "postfix"}
     foreign = [n for n in names if not n.startswith("cps-") and n not in standard]
@@ -433,6 +439,8 @@ def run():
 def apply_fix(fix_id):
     if fix_id == "add_cloudflare":
         return access.add_never_many(netinfo.CLOUDFLARE, "Cloudflare")
+    if fix_id == "restart_blocker":
+        return blocker.repair()
     if fix_id == "reapply_lock":
         res = access.apply()
         return Result(True, "The admin pages are locked again.") if res.ok else res

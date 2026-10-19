@@ -6,6 +6,7 @@ import ipaddress
 import os
 import re
 import shutil
+import time
 
 from . import config, util
 from .util import Result
@@ -51,6 +52,7 @@ def status():
         "enabled_at_boot": service_enabled() if installed() else False,
         "feed_active": feed_active(),
         "recent_errors": recent_errors(),
+        "jails_without_action": jails_without_action() if names else [],
     }
 
 
@@ -269,6 +271,39 @@ LOGROTATE = """# Written by CP-Security.
 """
 
 
+def jails_without_action():
+    """Running protections that notice attackers but cannot block anybody.
+
+    fail2ban 0.11 can lose a protection's ban action when a reload changes it (seen on the first real server:
+    the SSH protection logged "already banned" over and over while nothing was really blocked).
+    """
+    bad = []
+    for name in jails() or []:
+        rc, out = util.run(["fail2ban-client", "get", name, "actions"])
+        if "No actions" in out:
+            bad.append(name)
+    return bad
+
+
+def ensure_actions():
+    """Make sure every running protection can really block. A full restart repairs it (bans are remembered)."""
+    if not jails_without_action():
+        return Result(True, "Every protection can block.")
+    return repair()
+
+
+def repair():
+    """Restart the blocker once and check again. Existing bans come back by themselves."""
+    util.run(["systemctl", "restart", "fail2ban"], timeout=120)
+    time.sleep(6)
+    still = jails_without_action()
+    if still:
+        return Result(False, "These protections still cannot block anybody: %s. Look at /var/log/fail2ban.log."
+                      % ", ".join(still), "no_action")
+    return Result(True, "The blocker was restarted because some protections had lost their ban action. "
+                        "They work again and earlier blocks were restored.", "repaired")
+
+
 def tuning():
     """The numbers for every protection: defaults, then whatever the owner changed."""
     stored = util.read_json(config.P.blocker_settings, {})
@@ -354,6 +389,9 @@ def write_config():
             util.restore(snap)
             util.run(["fail2ban-client", "reload"], timeout=90)
             return Result(False, "The blocker would not reload, so the old settings were put back.", "reload_failed")
+        checked = ensure_actions()
+        if not checked.ok:
+            return checked
     note = (" Left out because this server has no log for them: %s." % ", ".join(skipped)) if skipped else ""
     return Result(True, "The blocker settings are in place." + note)
 

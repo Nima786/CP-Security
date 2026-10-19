@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2
+Found by checking the first real installation:
+* **Fix:** the WordPress login watcher read no logins at all, because CyberPanel's LiteSpeed writes the request without
+  quotes. It now accepts both forms (tested with lines copied from the real server).
+* **Fix:** after installing, the SSH protection logged attackers but had lost its ban action (a fail2ban 0.11 reload
+  problem), so nobody was really blocked. The blocker now checks every protection after each reload and restarts
+  once to repair it; the overview and the Advisor warn if it ever happens again and offer a repair button.
+* **Fix:** the admin-lock service is now started, not only enabled (it showed as inactive).
+
 ## 0.2.1
 * **Fix:** the panel crashed on start-up (a mix-up of two names in the start-up code). Found on the first real
   install. New tests now start the panel for real over HTTPS and call every page's data from the live engine.

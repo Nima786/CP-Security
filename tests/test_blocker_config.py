@@ -129,3 +129,72 @@ class LikeTheFirstServer(WithLogs):
         line = '203.0.113.9 - - [19/Oct/2026:03:07:47 +0100] "POST /wp-login.php HTTP/1.1" 401 10 "-" "x"\n'
         self.assertIn("WPLOGIN 203.0.113.9", feed.convert(line, "a.example.com"))
         self.assertIsNone(feed.convert(line.replace(" 401 ", " 302 "), "a.example.com"))
+
+
+class ProtectionsThatCannotBlock(WithLogs):
+    """Found on the first real server: after a reload the SSH protection kept logging 'already banned' but had no
+    ban action, so nobody was really blocked. The blocker must notice that and repair it."""
+
+    def setUp(self):
+        super().setUp()
+        self.patch("cpsec.blocker.time.sleep")
+        self.broken = {"sshd"}
+        self.fake.table = [
+            (("fail2ban-client", "status"), (0, "Status\n`- Jail list:\tsshd, cps-wp-login")),
+            (["systemctl", "restart", "fail2ban"], self.restart),
+            (["fail2ban-client", "get"], self.get_actions),
+            (["fail2ban-client", "-t"], (0, "OK")),
+        ]
+
+    def restart(self, cmd):
+        self.broken = set()
+        return 0, ""
+
+    def get_actions(self, cmd):
+        name = cmd[2]
+        if name in self.broken:
+            return 0, "No actions for jail %s" % name
+        return 0, "The jail %s has the following actions:\nnftables-multiport" % name
+
+    def test_a_protection_without_a_ban_action_is_found(self):
+        self.assertEqual(blocker.jails_without_action(), ["sshd"])
+        self.broken = set()
+        self.assertEqual(blocker.jails_without_action(), [])
+
+    def test_a_healthy_blocker_is_left_alone(self):
+        self.broken = set()
+        self.assertTrue(blocker.ensure_actions().ok)
+        self.assertEqual(self.fake.called("systemctl", "restart"), [])
+
+    def test_a_broken_one_is_repaired_by_one_restart(self):
+        r = blocker.ensure_actions()
+        self.assertEqual((r.ok, r.code), (True, "repaired"))
+        self.assertEqual(len(self.fake.called("systemctl", "restart", "fail2ban")), 1)
+        self.assertEqual(blocker.jails_without_action(), [])
+
+    def test_a_restart_that_does_not_help_is_reported_plainly(self):
+        self.fake.table[1] = (["systemctl", "restart", "fail2ban"], (0, ""))        # restart changes nothing
+        r = blocker.ensure_actions()
+        self.assertEqual((r.ok, r.code), (False, "no_action"))
+        self.assertIn("sshd", r.message)
+
+    def test_writing_new_settings_checks_afterwards_and_repairs(self):
+        r = blocker.write_config()
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual(self.broken, set(), "the reload broke sshd, the check noticed and restarted")
+        self.assertEqual(len(self.fake.called("fail2ban-client", "reload")), 1)
+        self.assertEqual(len(self.fake.called("systemctl", "restart", "fail2ban")), 1)
+
+    def test_the_overview_and_the_advisor_both_say_so_and_offer_the_fix(self):
+        from cpsec import advisor, health
+        self.patch("cpsec.blocker.installed", return_value=True)
+        self.patch("cpsec.health.access.lock_is_live", return_value=True)
+        self.patch("cpsec.health.sites.summarize", return_value={"new_problems": [], "old_problems": [], "normal": 0, "total": 0, "sites": []})
+        self.patch("cpsec.health.blocker.ban_events", return_value=[])
+        rows = {r["key"]: r for r in health.overview()["rows"]}
+        self.assertEqual(rows["blocker_actions"]["status"], "bad")
+        self.assertIn("sshd", rows["blocker_actions"]["text"])
+        finding = [f for f in advisor.check_blocker_and_others() if f["id"] == "blocker_noaction"][0]
+        self.assertEqual((finding["level"], finding["fix"]["id"]), ("bad", "restart_blocker"))
+        self.assertTrue(advisor.apply_fix("restart_blocker").ok)
+        self.assertEqual(blocker.jails_without_action(), [])

@@ -42,6 +42,19 @@ Things that cost hours to discover. They explain several design choices, so they
   not do reliably. The threshold is a plain number, so an unset value can never block everything.
 * The audit log holds request headers (cookies!). Keep it `0600`, owned by the web server user.
 
+## Found by checking the first real installation
+* fail2ban 0.11: when a reload changes the ban action of a protection that already exists (the Ubuntu default
+  `iptables-multiport` becomes `nftables-multiport`), that protection can end up with **no action at all**. The log
+  then says "already banned" again and again while nothing is blocked, and the blocker's own firewall table is
+  missing. `fail2ban-client get <jail> actions` answering "No actions for jail" is the tell-tale; a restart repairs it
+  and the earlier bans are restored from the blocker's database.
+* CyberPanel's LiteSpeed writes access-log lines WITHOUT quotes around the request:
+  `1.2.3.4 - - [19/Oct/2026:08:46:15 +0100] POST /wp-login.php HTTP/2 401 1469 …`. A pattern that insists on the quotes
+  silently reads nothing. Always test a log reader against lines copied from the real server.
+* A failed WordPress login is answered 200 (form shown again) or 401; a good one 302.
+* A tool that "has been installed" is not the same as one that works: check the result the way an attacker would
+  see it (send harmless attack-looking requests, look at what was recorded).
+
 ## Operational
 * Run LiteSpeed changes with a graceful restart (`lswsctrl restart`) and a check of several sites afterwards.
 * CyberPanel regenerates `httpd.conf` and `modsec.conf` from its own pages. Never save the ModSecurity page there.

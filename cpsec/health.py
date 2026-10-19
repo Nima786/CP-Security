@@ -26,6 +26,11 @@ def overview(site_results=None):
             rows.append(_row("blocker_errors", "Blocker errors", "bad", "The blocker logged an internal error in the last day"))
             problems += 1
 
+    if st.get("jails_without_action"):
+        rows.append(_row("blocker_actions", "Blocker bans", "bad",
+                         "These protections notice attackers but cannot block them: " + ", ".join(st["jails_without_action"])))
+        problems += 1
+
     if st["feed_active"]:
         rows.append(_row("feed", "Login watcher", "ok", "Copying WordPress login attempts for the blocker"))
     else:

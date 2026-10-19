@@ -95,3 +95,49 @@ class Following(EnvTestCase):
         os.remove(self.log)
         self.assertEqual(self.follower.poll(), [])
         self.assertEqual(self.follower.state, {})
+
+
+# Lines copied from the first real server: its LiteSpeed writes the request WITHOUT quotes and often with HTTP/2.
+REAL = {
+    "failed_200": "203.0.113.11 - - [09/Oct/2026:09:49:52 +0100] POST /wp-login.php HTTP/1.1 200 12210 - Mozilla/5.0\n",
+    "failed_401": ("203.0.113.12 - - [16/Oct/2026:04:46:03 +0100] POST /wp-login.php HTTP/2 401 1469 "
+                   "https://www.shop.example.com/wp-login.php Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)\n"),
+    "good_302": ("198.51.100.7 - - [17/Oct/2026:11:04:26 +0100] POST /wp-login.php HTTP/2 302 0 "
+                 "https://x.example.com/wp-login.php?redirect_to=https%3A%2F%2Fx.example.com%2Fwp-admin%2F&reauth=1 Mozilla/5.0\n"),
+    "admin_email": ("198.51.100.8 - - [17/Oct/2026:11:08:37 +0100] POST /wp-login.php?action=confirm_admin_email HTTP/2 302 0 "
+                    "https://y.example.com/wp-login.php Mozilla/5.0\n"),
+    "my_own_test": "127.0.0.1 - - [19/Oct/2026:08:46:15 +0100] POST /wp-login.php?cpsprobe=1 HTTP/2 200 12304 - curl/7.81.0\n",
+}
+
+
+class TheRealLogFormat(EnvTestCase):
+    def test_failed_logins_are_copied_in_the_servers_own_format(self):
+        for name in ("failed_200", "failed_401", "my_own_test"):
+            out = feed.convert(REAL[name], "a.example.com")
+            self.assertIsNotNone(out, name)
+            self.assertIn("WPLOGIN", out)
+
+    def test_good_logins_and_other_wordpress_posts_are_not_copied(self):
+        for name in ("good_302", "admin_email"):
+            self.assertIsNone(feed.convert(REAL[name], "a.example.com"), name)
+
+    def test_the_whole_chain_works_on_a_file_in_that_format(self):
+        log = config.P.home_dir + "/shop.example.com/logs/shop.example.com.access_log"
+        self.write(log, "")
+        follower = feed.Follower()
+        follower.poll()
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(REAL["failed_200"] + REAL["good_302"] + REAL["failed_401"])
+        self.assertEqual(len(follower.poll()), 2)
+        tidy = open(config.P.wplogin_log, encoding="utf-8").read().splitlines()
+        self.assertEqual(len(tidy), 2)
+        self.assertRegex(tidy[0], r"WPLOGIN 203\.0\.113\.11 shop\.example\.com 200$")
+
+    def test_the_tidy_lines_match_the_blockers_filter(self):
+        import re
+        from cpsec import blocker
+        regex = blocker.FILTER_WP_LOGIN.split("failregex = ")[1].split("\n")[0].replace("<HOST>", r"(?P<host>\S+)")
+        line = feed.convert(REAL["failed_401"], "shop.example.com")
+        match = re.search(regex.replace("\\\\", "\\"), line)
+        self.assertTrue(match, line)
+        self.assertEqual(match.group("host"), "203.0.113.12")

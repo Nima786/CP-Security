@@ -618,3 +618,27 @@ class FirstRunOnTheOldServer(EnvTestCase):
         f = advisor.check_lock()[0]
         self.assertEqual(f["level"], "info")
         self.assertIn("earlier", f["title"])
+
+
+class TheLockReallyRuns(EnvTestCase):
+    """The first real server showed the lock service 'enabled' but not running: it only worked because the rules had
+    been loaded by hand. A service that is not running does not remove the rules at shutdown and looks broken."""
+
+    def setUp(self):
+        super().setUp()
+        access.write_list(config.P.admin_list, [("203.0.113.9", "Home")], access.ADMIN_HEADER)
+        self.patch("cpsec.blocker.installed", return_value=False)
+        self.patch("cpsec.provision.shutil.which", return_value="/usr/sbin/nft")
+
+    def test_the_step_starts_the_service_and_not_only_enables_it(self):
+        self.assertTrue(provision.BY_KEY["lock"].run(lambda m: None).ok)
+        self.assertTrue(self.fake.called("systemctl", "enable", "--now", provision.SERVICE_LOCK))
+
+    def test_an_enabled_but_stopped_lock_service_is_not_called_done(self):
+        provision.BY_KEY["lock"].run(lambda m: None)
+        self.patch("cpsec.access.lock_is_live", return_value=True)
+        self.patch("cpsec.provision.unit_enabled", return_value=True)
+        self.patch("cpsec.provision.unit_active", return_value=False)
+        self.assertEqual(provision.BY_KEY["lock"].state()[0], "todo")
+        self.patch("cpsec.provision.unit_active", return_value=True)
+        self.assertEqual(provision.BY_KEY["lock"].state()[0], "done")

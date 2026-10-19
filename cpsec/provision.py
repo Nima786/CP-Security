@@ -327,7 +327,7 @@ class Lock(Step):
                 return "todo", "Your trusted addresses will be copied from the earlier setup, then the lock is set up."
             return "blocked", "Add at least one trusted address first (yours), or you would lock yourself out."
         if access.lock_is_live() and os.path.exists(config.P.systemd_dir + "/" + SERVICE_LOCK) \
-                and unit_enabled(SERVICE_LOCK):
+                and unit_enabled(SERVICE_LOCK) and unit_active(SERVICE_LOCK):
             return "done", "The admin pages are locked and the lock comes back after a restart."
         return "todo", "The admin pages are not locked by CP-Security yet."
 
@@ -353,7 +353,8 @@ class Lock(Step):
             return res
         log("lock loaded")
         write_unit(SERVICE_LOCK, UNIT_LOCK.format(nft=nft_path(), nft_file=config.P.nft_file, table=access.TABLE))
-        ok, out = enable_unit(SERVICE_LOCK, start=False)
+        # start it as well (not only enable it): the rules are already loaded, starting re-applies the same file
+        ok, out = enable_unit(SERVICE_LOCK)
         if not ok:
             return Result(False, "The lock works now, but it could not be set to start after a restart: " + _tail(out),
                           "enable_failed")
@@ -651,6 +652,9 @@ class Retire(Step):
                           " Your files are in " + backup + ".", "f2b_rejected")
         if blocker.jails() is not None:
             util.run(["fail2ban-client", "reload"], timeout=90)
+            checked = blocker.ensure_actions()
+            if not checked.ok:
+                return checked
         for d in webserver.LEGACY_WAF_DIR_NAMES:
             put_away("%s/%s" % (p.lsws_conf, d))
         for path in (_glob(p.at("/var/log/pb-*")) + _glob(p.at("/etc/pb-admin-firewall.nft*"))
