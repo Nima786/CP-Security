@@ -3,7 +3,8 @@
 Why it exists: the blocker (fail2ban 0.11) can crash on web-server log lines that attack traffic
 makes short or odd, and a crashed blocker silently protects nothing. This helper reads the websites'
 logs itself, keeps only well-formed "POST /wp-login.php" lines that WordPress answered with its login
-form again (that is what a wrong password looks like), and writes them in a fixed format:
+form again (200) or with "unauthorized" (401), which is what a wrong password looks like, and writes them
+in a fixed format:
 
     2026-10-19 03:07:47 WPLOGIN 203.0.113.9 shop.example.com 200
 
@@ -42,7 +43,7 @@ def clean_domain(text):
 def convert(line, domain, now=None):
     """One web-server log line -> one tidy line, or None when it is not a failed login."""
     m = LINE.match(line)
-    if not m or m.group(2) != "200":
+    if not m or m.group(2) not in ("200", "401"):
         return None
     ip = m.group(1)
     try:

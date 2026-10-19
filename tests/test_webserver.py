@@ -173,6 +173,7 @@ class OpenLiteSpeedHook(EnvTestCase):
 class OtherRulePacks(EnvTestCase):
     def test_cyberpanels_owasp_pack_on_openlitespeed_is_noticed(self):
         self.write(config.P.lsws_bin_ols, "")
+        self.write(config.P.at("/usr/local/lsws/conf/modsec/owasp/rules/REQUEST-901.conf"), "")
         self.write(config.P.ols_conf, OLS_CONF.replace(
             "modsecurity_rules_file /usr/local/lsws/conf/modsec/rules.conf",
             "modsecurity_rules_file /usr/local/lsws/conf/modsec/owasp/rules/REQUEST-901.conf\n"
@@ -181,11 +182,24 @@ class OtherRulePacks(EnvTestCase):
 
     def test_comodo_on_enterprise_is_noticed(self):
         self.write(config.P.lsws_xml, "<config/>")
+        self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/rules.dat.conf"), "")
         self.write(config.P.modsec_conf, ENTERPRISE_MODSEC)
         self.write(config.P.lsws_conf + "/rules.conf",
                    "Include /usr/local/lsws/conf/comodo_litespeed/rules.dat.conf\n")
         self.assertEqual(webserver.other_rule_packs(), ["Comodo rules switched on in CyberPanel"])
 
+    def test_cyberpanels_untouched_file_names_empty_rule_folders_and_that_is_not_an_active_pack(self):
+        # copied from a real, never-edited CyberPanel Enterprise server
+        self.write(config.P.lsws_xml, "<config/>")
+        self.write(config.P.modsec_conf, "<IfModule security2_module>\nSecRuleEngine off\nSecAuditEngine on\n"
+                   "Include /usr/local/lsws/conf/comodo_litespeed/*.conf\n"
+                   "Include /usr/local/lsws/conf/modsec/owasp-modsecurity-crs-3.0-master/*.conf\n</IfModule>\n")
+        self.assertEqual(webserver.other_rule_packs(), [])
+        os.makedirs(config.P.at("/usr/local/lsws/conf/comodo_litespeed"))
+        self.assertEqual(webserver.other_rule_packs(), [], "an empty folder is still nothing")
+        self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/rules.conf"), "")
+        self.assertEqual(webserver.other_rule_packs(), ["Comodo rules switched on in CyberPanel"],
+                         "the same line counts once rule files are really there")
     def test_our_own_rules_do_not_count_as_somebody_elses(self):
         self.write(config.P.lsws_xml, "<config/>")
         self.write(config.P.modsec_conf, ENTERPRISE_MODSEC)

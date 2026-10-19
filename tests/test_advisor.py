@@ -25,6 +25,7 @@ class WebFirewall(Quiet):
     def test_cyberpanels_rules_next_to_ours_is_a_clash(self):
         self.write(config.P.lsws_bin_ols, "")
         self.write(config.P.ols_module, "")
+        self.write(config.P.at("/usr/local/lsws/conf/modsec/owasp/rules/REQUEST-901.conf"), "")
         self.write(config.P.ols_conf,
                    "module mod_security {\nmodsecurity on\n"
                    "modsecurity_rules_file /usr/local/lsws/conf/modsec/owasp/rules/REQUEST-901.conf\n}\n")
@@ -37,6 +38,7 @@ class WebFirewall(Quiet):
 
     def test_cyberpanels_rules_alone_are_left_alone(self):
         self.write(config.P.lsws_xml, "<config/>")
+        self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/x.conf"), "")
         self.write(config.P.modsec_conf, "<IfModule security2_module>\nInclude /usr/local/lsws/conf/comodo_litespeed/x.conf\n</IfModule>\n")
         found = advisor.check_modsecurity()
         self.assertEqual(ids(found), ["modsec_other"])

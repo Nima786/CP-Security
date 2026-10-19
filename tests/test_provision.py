@@ -134,7 +134,8 @@ class Plan(EnvTestCase):
 
     def test_firewall_is_not_offered_when_cyberpanels_own_rules_are_on(self):
         self.write(config.P.lsws_xml, "<config/>")
-        self.write(config.P.modsec_conf, "<IfModule security2_module>\nInclude /x/comodo_litespeed/rules.conf\n</IfModule>\n")
+        self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/rules.conf"), "")
+        self.write(config.P.modsec_conf, "<IfModule security2_module>\nInclude /usr/local/lsws/conf/comodo_litespeed/rules.conf\n</IfModule>\n")
         steps = {s["key"]: s for s in provision.plan()}
         self.assertEqual(steps["waf"]["state"], "blocked")
         self.assertIn("same rule numbers", steps["waf"]["note"])
@@ -238,6 +239,33 @@ class WafStep(EnvTestCase):
         self.assertTrue(os.path.exists(config.P.audit_log))
         self.assertTrue(self.restart.called and self.selftest.called)
 
+    def test_the_settings_are_the_ones_proven_on_the_first_server(self):
+        self.run_step()
+        main = util.read_text(config.P.waf_main)
+        for line in ("SecRequestBodyAccess On", "SecRequestBodyLimit 13107200", "SecRequestBodyNoFilesLimit 1310720",
+                     "SecRequestBodyLimitAction ProcessPartial", "SecResponseBodyAccess Off", "SecAuditLogParts ABHZ",
+                     "SecDataDir " + config.P.modsec_data):
+            self.assertIn(line, main)
+        setup = util.read_text(config.P.waf_setup)
+        self.assertIn("GET HEAD POST OPTIONS PUT PATCH DELETE", setup, "the WordPress editor and the shop API use these")
+        self.assertIn("tx.paranoia_level=1", setup)
+        self.assertIn("inbound_anomaly_score_threshold=5", setup)
+        self.assertTrue(os.path.isdir(config.P.modsec_data))
+        rules = util.read_text(config.P.waf_rules)
+        self.assertNotIn("934", rules)
+        self.assertNotIn("944", rules)
+
+    def test_the_firewall_log_is_rotated_and_never_twice(self):
+        self.run_step()
+        rotate = util.read_text(config.P.logrotate_dir + "/cps-waf")
+        self.assertIn(config.P.audit_log, rotate)
+        self.assertIn("chmod 600", rotate)
+
+    def test_an_existing_rotation_of_the_same_log_is_respected(self):
+        self.write(config.P.logrotate_dir + "/pb-waf", config.P.audit_log + " {\n    daily\n}\n")
+        self.run_step()
+        self.assertFalse(os.path.exists(config.P.logrotate_dir + "/cps-waf"), "two entries would make logrotate skip both")
+
     def test_the_converter_removed_the_skip_instructions(self):
         self.fetch.return_value = make_tarball({
             "REQUEST-942-APPLICATION-ATTACK-SQLI.conf":
@@ -283,6 +311,7 @@ class WafStep(EnvTestCase):
         self.assertFalse(os.path.exists(config.P.waf_dir))
 
     def test_cyberpanels_own_rules_are_never_doubled_up(self):
+        self.write(config.P.at("/usr/local/lsws/conf/comodo_litespeed/x.conf"), "")
         self.write(config.P.modsec_conf, self.original + "Include /usr/local/lsws/conf/comodo_litespeed/x.conf\n")
         r = self.run_step()
         self.assertEqual((r.ok, r.code), (False, "blocked"))
@@ -324,6 +353,12 @@ class Earlier(EnvTestCase):
         self.write(p.f2b_filter_dir + "/pb-wp-login.conf", "[Definition]\n")
         self.write(p.lsws_conf + "/pb-waf/rules.conf", "x\n")
         self.write(p.at("/var/log/pb-wp-login.log"), "")
+        self.write(p.at("/etc/pb-admin-firewall.nft"), "table inet pb_fw {}\n")
+        self.write(p.at("/etc/pb-admin-firewall.nft.bak-20261017-103402"), "x")
+        self.write(p.at("/usr/local/sbin/pb-wplogin-feed"), "#!/bin/bash\n")
+        self.write(p.at("/usr/local/lib/pb-security/pb_rules_pl1.py"), "x")
+        self.write(p.logrotate_dir + "/pb-waf", config.P.audit_log + " {\n    daily\n}\n")
+        self.write(p.logrotate_dir + "/pb-wp-login", "/var/log/pb-wp-login.log {\n    daily\n}\n")
         self.fake.table.append((["nft", "list", "tables"], (0, "table inet pb_fw\ntable inet f2b-table\n")))
         self.patch("cpsec.blocker.installed", return_value=True)
         self.patch("cpsec.provision.time.sleep")
@@ -365,7 +400,11 @@ class Earlier(EnvTestCase):
         backup = [d for d in os.listdir(config.P.conf_dir) if d.startswith("legacy-")]
         self.assertEqual(len(backup), 1)
         saved = os.listdir(os.path.join(config.P.conf_dir, backup[0]))
-        self.assertEqual(len(saved), 7, saved)
+        self.assertEqual(len(saved), 13, saved)
+        for gone in ("/etc/pb-admin-firewall.nft", "/usr/local/sbin/pb-wplogin-feed", "/usr/local/lib/pb-security"):
+            self.assertFalse(os.path.exists(config.P.at(gone)), gone)
+        self.assertTrue(os.path.exists(config.P.logrotate_dir + "/cps-waf"),
+                        "the firewall log keeps being rotated once the earlier rotation file is gone")
         # only the table is still "listed", and only because the pretend firewall tool keeps answering the same
         self.assertEqual([i for i in provision.legacy_items() if "firewall table" not in i], [])
 

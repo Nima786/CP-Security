@@ -17,7 +17,9 @@ class Numbers(WithLogs):
     def test_defaults_when_nothing_was_changed(self):
         t = blocker.tuning()
         self.assertEqual(set(t), set(blocker.TUNABLE))
-        self.assertEqual(t["sshd"], {"maxretry": 5, "findtime": 600, "bantime": 3600})
+        self.assertEqual(t["sshd"], {"maxretry": 4, "findtime": 600, "bantime": 3600})
+        self.assertEqual(t["cps-wp-login"]["maxretry"], 8, "the numbers the first production server ran with")
+        self.assertEqual(t["cps-mail-auth"]["maxretry"], 6)
 
     def test_changed_numbers_replace_only_what_was_changed(self):
         self.assertTrue(blocker.set_tuning({"cps-wp-login": {"maxretry": 3}}).ok)
@@ -108,3 +110,22 @@ class WritingIt(WithLogs):
         sample = "2026-10-19 03:07:47 LOGIN_FAILED ip=203.0.113.9 user=admin"
         regex = blocker.FILTER_PANEL.split("failregex = ")[1].split("\n")[0].replace("<HOST>", r"(?P<host>\S+)")
         self.assertTrue(re.search(regex.replace("\\\\", "\\"), sample))
+
+class LikeTheFirstServer(WithLogs):
+    """Things that were proven on the first production server and must not be lost."""
+
+    def test_repeat_offenders_are_blocked_longer_every_time(self):
+        text = blocker.render_jails()[0]
+        self.assertEqual(text.count("bantime.increment = true"), len(blocker.TUNABLE))
+        self.assertIn("bantime.maxtime = 7d", text)
+
+    def test_the_huge_shared_system_log_is_read_from_the_end(self):
+        text = blocker.render_jails()[0]
+        self.assertIn("logpath = %s tail" % config.P.at("/var/log/syslog"), text)
+        self.assertNotIn("mail.log tail", text)
+
+    def test_a_401_counts_as_a_failed_login_just_like_a_200(self):
+        from cpsec import feed
+        line = '203.0.113.9 - - [19/Oct/2026:03:07:47 +0100] "POST /wp-login.php HTTP/1.1" 401 10 "-" "x"\n'
+        self.assertIn("WPLOGIN 203.0.113.9", feed.convert(line, "a.example.com"))
+        self.assertIsNone(feed.convert(line.replace(" 401 ", " 302 "), "a.example.com"))

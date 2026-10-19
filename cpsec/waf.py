@@ -38,20 +38,30 @@ BLOCK_TEMPLATE = (
 )
 HOST_OK = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 
+# These values were proven on a busy WordPress/WooCommerce server (see docs/LESSONS-LEARNED.md): the body limits
+# let large forms and uploads through, the audit log keeps request headers (A, B) and the rule messages (H).
 MAIN_TEMPLATE = (
     "# CP-Security web firewall. Written by CP-Security: change it from the panel or the menu, not by hand.\n"
     "SecRuleEngine %(engine)s\n"
+    "SecRequestBodyAccess On\n"
+    "SecRequestBodyLimit 13107200\n"
+    "SecRequestBodyNoFilesLimit 1310720\n"
+    "SecRequestBodyLimitAction ProcessPartial\n"
+    "SecResponseBodyAccess Off\n"
     "SecAuditEngine On\n"
-    "SecAuditLogParts ABH\n"
+    "SecAuditLogParts ABHZ\n"
     "SecAuditLogType Serial\n"
     "SecAuditLog %(audit)s\n"
+    "SecDebugLogLevel 0\n"
+    "SecDataDir %(data)s\n"
     "Include %(rules)s\n"
 )
 
 
 def render_main(engine):
     """The text of our main file. engine: 'On' or 'Off'."""
-    return MAIN_TEMPLATE % {"engine": engine, "audit": config.P.audit_log, "rules": config.P.waf_rules}
+    return MAIN_TEMPLATE % {"engine": engine, "audit": config.P.audit_log, "rules": config.P.waf_rules,
+                            "data": config.P.modsec_data}
 
 
 # ----------------------------------------------------------------------------- state

@@ -401,7 +401,7 @@ class AdvisorAndSetup(PanelCase):
 
     def test_blocker_numbers_round_trip_and_silly_ones_are_refused(self):
         _, data = self.request("GET", "/api/settings/blocker")
-        self.assertEqual(data["tuning"]["sshd"]["maxretry"], 5)
+        self.assertEqual(data["tuning"]["sshd"]["maxretry"], 4)
         self.assertIn("sshd", data["names"])
         resp, ok = self.request("POST", "/api/settings/blocker", {"changes": {"sshd": {"maxretry": 3}}})
         self.assertTrue(ok["ok"], ok)

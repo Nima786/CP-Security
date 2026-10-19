@@ -45,6 +45,7 @@ class Paths:
         self.ols_conf = self.lsws_conf + "/httpd_config.conf"         # OpenLiteSpeed settings
         self.ols_module = self.lsws_root + "/modules/mod_security.so"
         self.modsec_conf = self.lsws_conf + "/modsec.conf"            # LiteSpeed Enterprise ModSecurity file
+        self.modsec_data = self.lsws_root + "/modsec"                 # ModSecurity's working folder
         self.waf_dir = self.lsws_conf + "/cps-waf"
         self.waf_main = self.waf_dir + "/main.conf"
         self.waf_rules = self.waf_dir + "/rules.conf"

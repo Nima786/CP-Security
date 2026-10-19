@@ -36,24 +36,48 @@ CRS_URL = "https://github.com/coreruleset/coreruleset/archive/refs/tags/v3.3.10.
 CRS_SHA256 = "59f5b0bf65333916ff5075a3fb805f4661c81184cbdcbcef18e757cc86be0ccb"
 CRS_MAX_BYTES = 25 * 1024 * 1024
 
-# Rule files we load, in order. 905 is left out on purpose (it switches the engine off for local requests),
-# 949 too (we use one small blocking rule of our own), 910 and 912 need data we do not ship.
+# Rule files we load, in order: exactly the set that was proven on the first production server. 905 is left out
+# on purpose (it switches the engine off for local requests), 949 too (we use one small blocking rule of our own),
+# 910 and 912 need data we do not ship, 934 and 944 (Node.js / Java) have not been tried on this engine.
 CRS_ORDER = (
     "REQUEST-901-INITIALIZATION.conf", "REQUEST-911-METHOD-ENFORCEMENT.conf", "REQUEST-913-SCANNER-DETECTION.conf",
     "REQUEST-920-PROTOCOL-ENFORCEMENT.conf", "REQUEST-921-PROTOCOL-ATTACK.conf",
     "REQUEST-930-APPLICATION-ATTACK-LFI.conf", "REQUEST-931-APPLICATION-ATTACK-RFI.conf",
     "REQUEST-932-APPLICATION-ATTACK-RCE.conf", "REQUEST-933-APPLICATION-ATTACK-PHP.conf",
-    "REQUEST-934-APPLICATION-ATTACK-GENERIC.conf", "REQUEST-941-APPLICATION-ATTACK-XSS.conf",
-    "REQUEST-942-APPLICATION-ATTACK-SQLI.conf", "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
-    "REQUEST-944-APPLICATION-ATTACK-JAVA.conf",
+    "REQUEST-941-APPLICATION-ATTACK-XSS.conf", "REQUEST-942-APPLICATION-ATTACK-SQLI.conf",
+    "REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf",
 )
 CRS_SETUP = (
-    "# Written by CP-Security. The smallest setup the OWASP rules need.\n"
+    "# Written by CP-Security: the settings for the OWASP rules. Do not edit by hand.\n"
     'SecDefaultAction "phase:1,log,auditlog,pass"\n'
     'SecDefaultAction "phase:2,log,auditlog,pass"\n'
+    "# Gentlest sensitivity (paranoia level 1) = fewest false alarms.\n"
+    'SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level=1"\n'
+    'SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.executing_paranoia_level=1"\n'
+    "# One serious finding (score 5) is enough to count a request as an attack.\n"
+    'SecAction "id:900110,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold=5,setvar:tx.outbound_anomaly_score_threshold=4"\n'
+    "# WordPress and WooCommerce use these methods for the editor and the REST API.\n"
+    "SecAction \"id:900200,phase:1,nolog,pass,t:none,setvar:'tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE'\"\n"
     'SecAction "id:900990,phase:1,nolog,pass,t:none,setvar:tx.crs_setup_version=%s"\n'
+    'SecAction "id:900010,phase:1,nolog,pass,t:none,setvar:tx.critical_anomaly_score=5,setvar:tx.error_anomaly_score=4,setvar:tx.warning_anomaly_score=3,setvar:tx.notice_anomaly_score=2"\n'
     % CRS_VERSION.replace(".", "")
 )
+
+LOGROTATE_AUDIT = """# Written by CP-Security. The firewall's log holds request headers (cookies!), so it stays private.
+%s {
+    daily
+    rotate 7
+    maxsize 200M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    postrotate
+        chmod 600 %s* 2>/dev/null || true
+    endscript
+}
+"""
 
 SERVICE_FEED = "cps-wplogin-feed.service"
 SERVICE_LOCK = "cps-admin-lock.service"
@@ -219,6 +243,9 @@ def legacy_items():
     for d in webserver.LEGACY_WAF_DIR_NAMES:
         if os.path.isdir("%s/%s" % (p.lsws_conf, d)):
             items.append("web firewall folder " + d)
+    for path in sorted(_glob(p.at("/etc/pb-admin-firewall.nft*")) + _glob(p.at("/usr/local/sbin/pb-*"))
+                       + _glob(p.logrotate_dir + "/pb-*") + _glob(p.at("/usr/local/lib/pb-security"))):
+        items.append("file " + path[len(p.root):] if p.root else "file " + path)
     if legacy_nft_tables():
         items.append("firewall table " + ", ".join(legacy_nft_tables()))
     return items
@@ -501,6 +528,9 @@ class Waf(Step):
             util.write_json(p.waf_settings, {"threshold": threshold, "mode": mode,
                                              "since": time.strftime("%Y-%m-%d")})
             ensure_audit_log()
+            ensure_audit_logrotate()
+            if not os.path.isdir(p.modsec_data):
+                os.makedirs(p.modsec_data, exist_ok=True)
             res = webserver.connect()
             if not res.ok:
                 return undo(res.message, res.code)
@@ -517,6 +547,17 @@ class Waf(Step):
             return Result(True, "The web firewall is on in %s mode. %s" % (waf.MODE_SHORT[mode].lower(), test.message))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def ensure_audit_logrotate():
+    """Rotate the firewall's log, unless some other rotation file (for example the earlier setup's) already does:
+    two entries for one log make logrotate complain and skip."""
+    p = config.P
+    for path in _glob(p.logrotate_dir + "/*"):
+        if os.path.basename(path) != "cps-waf" and p.audit_log in util.read_text(path):
+            return False
+    util.atomic_write(p.logrotate_dir + "/cps-waf", LOGROTATE_AUDIT % (p.audit_log, p.audit_log))
+    return True
 
 
 def ensure_audit_log():
@@ -596,8 +637,11 @@ class Retire(Step):
             util.run(["fail2ban-client", "reload"], timeout=90)
         for d in webserver.LEGACY_WAF_DIR_NAMES:
             put_away("%s/%s" % (p.lsws_conf, d))
-        for path in _glob(p.at("/var/log/pb-*")):
+        for path in (_glob(p.at("/var/log/pb-*")) + _glob(p.at("/etc/pb-admin-firewall.nft*"))
+                     + _glob(p.at("/usr/local/sbin/pb-*")) + _glob(p.logrotate_dir + "/pb-*")
+                     + _glob(p.at("/usr/local/lib/pb-security"))):
             put_away(path)
+        ensure_audit_logrotate()
         if os.path.isdir(p.legacy_conf_dir):
             put_away(p.legacy_conf_dir)
         return Result(True, "The earlier setup was put away. Its files are in %s." % backup)

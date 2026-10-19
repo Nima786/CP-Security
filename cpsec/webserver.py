@@ -9,6 +9,7 @@ Our own firewall settings live in one small file of our own (cps-waf/main.conf).
 does is add ONE line to the web server's own file that points to it, and take that line out again.
 Nothing else in CyberPanel's files is touched, so CyberPanel's own pages keep working.
 """
+import glob
 import os
 import re
 
@@ -153,12 +154,21 @@ def other_rule_packs():
     text = util.read_text(p.ols_conf) if kind() == OPENLITESPEED else util.read_text(p.lsws_conf + "/rules.conf")
     if kind() == ENTERPRISE:
         text += "\n" + util.read_text(p.modsec_conf)
-    low = text.lower()
-    if re.search(r"^\s*(include|modsecurity_rules_file)\s+\S*owasp\S*", low, re.M):
-        found.append("OWASP rules switched on in CyberPanel")
-    if re.search(r"^\s*(include|modsecurity_rules_file)\s+\S*comodo\S*", low, re.M):
-        found.append("Comodo rules switched on in CyberPanel")
+    for label, word in (("OWASP rules switched on in CyberPanel", "owasp"), ("Comodo rules switched on in CyberPanel", "comodo")):
+        if any(word in path.lower() and _has_files(path) for path in _included_paths(text)):
+            found.append(label)
     return found
+
+
+def _included_paths(text):
+    """Every file or pattern that the settings text includes."""
+    return re.findall(r"^\s*(?:include|modsecurity_rules_file)\s+(\S+)\s*$", text, re.M | re.I)
+
+
+def _has_files(pattern):
+    """Does the include really load something? CyberPanel's untouched file already names its rule folders
+    (with a * pattern) although nothing is in them, and an empty folder is not an active rule pack."""
+    return bool(glob.glob(config.P.at(pattern)))
 
 
 def firewall_setting(name):

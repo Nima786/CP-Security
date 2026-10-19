@@ -241,13 +241,21 @@ ignoreregex =
 OWN_FILTERS = {"cps-wp-login": FILTER_WP_LOGIN, "cps-mail-auth": FILTER_MAIL_AUTH, "cps-panel": FILTER_PANEL}
 
 TUNABLE = ("sshd", "cps-wp-login", "cps-mail-auth", "dovecot", "pure-ftpd", "cps-panel")
+# The numbers the first production server ran with for months. SSH is the strictest; web and mail logins
+# get a little more room because people mistype too.
 DEFAULT_TUNING = {name: {"maxretry": 5, "findtime": 600, "bantime": 3600} for name in TUNABLE}
+DEFAULT_TUNING["sshd"]["maxretry"] = 4
+DEFAULT_TUNING["cps-wp-login"]["maxretry"] = 8
+for _name in ("cps-mail-auth", "dovecot", "pure-ftpd"):
+    DEFAULT_TUNING[_name]["maxretry"] = 6
 LIMITS = {"maxretry": (2, 50), "findtime": (60, 86400), "bantime": (60, 2592000)}
 PORTS = {
     "cps-wp-login": "http,https",
     "cps-mail-auth": "25,465,587,143,993,110,995",
 }
-BAN_ACTIONS = "banaction = nftables-multiport\nbanaction_allports = nftables-allports\n"
+# Each repeat offence doubles the block, up to a week.
+BAN_ACTIONS = ("banaction = nftables-multiport\nbanaction_allports = nftables-allports\n"
+               "bantime.increment = true\nbantime.factor = 2\nbantime.maxtime = 7d\n")
 
 LOGROTATE = """# Written by CP-Security.
 %s {
@@ -310,7 +318,9 @@ def render_jails():
         if name in OWN_FILTERS:
             lines.append("filter = %s" % name)
         if logpath:
-            lines.append("logpath = %s" % logpath)
+            # the system log is huge and shared: only read what is written from now on
+            big = os.path.basename(logpath) in ("syslog", "messages")
+            lines.append("logpath = %s%s" % (logpath, " tail" if big else ""))
         if name in PORTS:
             lines.append("port = %s" % PORTS[name])
         lines += ["maxretry = %d" % n["maxretry"], "findtime = %d" % n["findtime"], "bantime = %d" % n["bantime"]]
