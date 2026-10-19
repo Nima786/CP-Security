@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+* **The "Advice for you" card on the Overview no longer blinks.** It used to appear only after the advice had been
+  gathered (a few seconds), pushing the rest of the page down, and it disappeared and came back each time the page
+  refreshed itself while the websites were being asked. The last advice is now shown at once, kept for the visit, and
+  replaced quietly only when it really changed.
+
 ## 0.4.0
 * **http:// now goes to https://.** Typing the panel's address without the "s" used to show an error. The panel now
   answers a plain-http request on its port with a permanent redirect to the same page over https. The destination is

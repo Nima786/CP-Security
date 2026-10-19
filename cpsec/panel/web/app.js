@@ -178,7 +178,7 @@
         id === 'overview' && S.problems ? h('span', { class: 'dot', title: S.problems + ' need attention' }) : null,
         id === 'advisor' && S.advice ? h('span', { class: 'dot warn', title: S.advice + ' suggestions' }) : null);
     const signOut = () => h('button', { class: 'btn small', type: 'button', text: 'Sign out', onclick: async () => {
-      await api('/api/logout', { method: 'POST', body: {} }); S.me = null; S.more = false; draw(); } });
+      await api('/api/logout', { method: 'POST', body: {} }); forgetAdvice(); S.advice = 0; S.me = null; S.more = false; draw(); } });
 
     let nav;
     if (small) {
@@ -303,7 +303,41 @@
   }
 
   // ------------------------------------------------------------------ overview
-  async function viewOverview(refresh) {
+  // the advice card on the Overview, remembered between redraws (and reloads of this tab) so it never blinks
+  const ADVICE_KEY = 'cps-advice';
+  function savedAdvice() {
+    if (S.adviceData) return S.adviceData;
+    try {
+      const v = JSON.parse(sessionStorage.getItem(ADVICE_KEY) || 'null');
+      if (v && Array.isArray(v.todo) && typeof v.at === 'number') { S.adviceData = v; return v; }
+    } catch (e) { /* storage unavailable or damaged: just ask again */ }
+    return null;
+  }
+  function rememberAdvice(todo) {
+    S.adviceData = { todo, at: Date.now() };
+    try { sessionStorage.setItem(ADVICE_KEY, JSON.stringify(S.adviceData)); } catch (e) { /* not essential */ }
+  }
+  function forgetAdvice() {
+    S.adviceData = null;
+    try { sessionStorage.removeItem(ADVICE_KEY); } catch (e) { /* not essential */ }
+  }
+  function showAdvice(slot, todo) {
+    if (!todo.length) {
+      slot.replaceChildren();
+      const old = document.querySelector('.nav a[href="#/advisor"] .dot');
+      if (old) old.remove();
+      return;
+    }
+    slot.replaceChildren(h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'Advice for you' }), badge(todo.length + ' suggestion' + (todo.length > 1 ? 's' : ''), 'warn'),
+        h('a', { class: 'btn small right', href: '#/advisor', text: 'See all advice' })),
+      h('div', { class: 'mini-list' }, todo.slice(0, 3).map(f => h('div', { class: 'mini ' + f.level }, icon(f.level === 'bad' ? 'alert' : 'info'),
+        h('div', {}, h('div', { class: 'what', text: f.title }), f.advice ? h('div', { class: 'text', text: f.advice }) : null))))));
+    const dot = document.querySelector('.nav a[href="#/advisor"]');
+    if (dot && !dot.querySelector('.dot')) dot.append(h('span', { class: 'dot warn', title: todo.length + ' suggestions' }));
+  }
+
+  async function viewOverview(refresh, soft) {
     const { data } = await api('/api/overview' + (refresh ? '?refresh=1' : ''));
     S.problems = data.problems || 0;
     const ok = S.problems === 0;
@@ -311,21 +345,23 @@
     const sorted = sites.sites.slice().sort((a, b) => Number(a.ok) - Number(b.ok) || a.domain.localeCompare(b.domain));
     // the websites are asked in the background (it takes several seconds): look again until the answers are in
     if (data.sites_checking) setTimeout(() => { if (S.view === 'overview') softRedraw(); }, 2500);
-    // the advice is gathered in the background so the page itself appears at once
+    // The advice takes a few seconds to gather, so the page does not wait for it. The last advice we saw is shown
+    // at once (kept for the whole visit), and the fresh answer replaces it quietly, only if something changed.
+    // Without this the card popped in late and pushed everything down, and vanished on every background refresh.
     const teaser = h('div', {});
-    api('/api/advisor').then(({ data: a }) => {
-      if (!a || !a.findings) return;
-      const todo = a.findings.filter(f => f.level === 'bad' || f.level === 'warn');
-      S.advice = todo.length;
-      if (!todo.length) return;
-      teaser.replaceChildren(h('section', { class: 'card flush' },
-        h('div', { class: 'card-head' }, h('h2', { text: 'Advice for you' }), badge(todo.length + ' suggestion' + (todo.length > 1 ? 's' : ''), 'warn'),
-          h('a', { class: 'btn small right', href: '#/advisor', text: 'See all advice' })),
-        h('div', { class: 'mini-list' }, todo.slice(0, 3).map(f => h('div', { class: 'mini ' + f.level }, icon(f.level === 'bad' ? 'alert' : 'info'),
-          h('div', {}, h('div', { class: 'what', text: f.title }), f.advice ? h('div', { class: 'text', text: f.advice }) : null))))));
-      const dot = document.querySelector('.nav a[href="#/advisor"]');
-      if (dot && !dot.querySelector('.dot')) dot.append(h('span', { class: 'dot warn', title: todo.length + ' suggestions' }));
-    });
+    const cached = savedAdvice();
+    if (cached) { showAdvice(teaser, cached.todo); S.advice = cached.todo.length; }
+    const recent = cached && Date.now() - cached.at < 120000;
+    if (refresh || !(soft && recent)) {
+      api('/api/advisor' + (refresh ? '?refresh=1' : '')).then(({ data: a }) => {
+        if (!a || !a.findings) return;
+        const todo = a.findings.filter(f => f.level === 'bad' || f.level === 'warn').map(f => ({ level: f.level, title: f.title, advice: f.advice || '' }));
+        const same = cached && JSON.stringify(cached.todo) === JSON.stringify(todo);
+        rememberAdvice(todo);
+        S.advice = todo.length;
+        if (!same) showAdvice(teaser, todo);
+      });
+    }
     return h('div', { class: 'stack' },
       pageHead('Overview', 'Checked ' + data.checked_at, h('button', { class: 'btn', type: 'button', text: 'Check again', onclick: () => redraw(true) })),
       h('div', { class: 'banner ' + (ok ? 'ok' : 'bad') }, icon(ok ? 'check' : 'alert'),
@@ -946,6 +982,7 @@
     const { data } = await api('/api/advisor' + (refresh ? '?refresh=1' : ''));
     const c = data.counts;
     S.advice = c.bad + c.warn;
+    rememberAdvice(data.findings.filter(f => f.level === 'bad' || f.level === 'warn').map(f => ({ level: f.level, title: f.title, advice: f.advice || '' })));
     const of = lvl => data.findings.filter(f => f.level === lvl);
     const finding = f => h('article', { class: 'finding ' + f.level },
       icon(f.level === 'ok' ? 'check' : f.level === 'info' ? 'info' : 'alert'),
@@ -1077,7 +1114,7 @@
   async function softRedraw() {
     const id = S.drawId;
     let content;
-    try { content = await VIEWS[S.view](false); } catch (e) { return; }
+    try { content = await VIEWS[S.view](false, true); } catch (e) { return; }
     const main = $('#main');
     if (id !== S.drawId || !S.me || !main) return;
     main.replaceChildren(versionBar(), content);
