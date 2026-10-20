@@ -61,6 +61,7 @@ Rule for everything here: explained in plain words, shown on a page, and the own
   folder and, once per website, of the database are saved; WP-CLI updates it as the website's own user; the website is asked again and the
   old copy goes back if it does not answer or shows a PHP crash. Limits: a database change made by an update is not undone by putting files
   back, licensed plugins may need a manual update, and WordPress core is not updated from here
+- ✅ Update by uploading a zip: for paid or custom plugins and themes. Upload once (kept on the server until you delete it), see which websites have the plugin and their versions, tick the ones to update; same safe routine, one at a time, several files in one run
 - ✅ "Refused in the last hour" on the Server firewall page (which ports the firewall turned away, with an "Allow this port" button);
   the Open ports page now says when the server firewall is what refuses a port
 - ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)

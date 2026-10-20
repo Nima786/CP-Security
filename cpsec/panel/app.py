@@ -8,11 +8,13 @@ Rules every route follows:
 import hmac
 import json
 import os
+import shutil
 import threading
 import time
-from urllib.parse import parse_qs, urlsplit
+import secrets
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from .. import __version__, provision, settings
+from .. import __version__, library, provision, settings
 from . import activity, auth
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -33,6 +35,8 @@ SECURITY_HEADERS = [
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
 ]
 MAX_BODY = 64 * 1024
+MAX_UPLOAD = library.MAX_ZIP                 # a plugin or theme zip: the only request that may be bigger than MAX_BODY
+UPLOAD_PATH = "/api/uploads/upload"
 COOKIE = "cps_session"
 
 
@@ -141,6 +145,10 @@ class App:
             ("POST", "/api/access/home"): (self.api_access_home, True),
             ("POST", "/api/access/never/add"): (self.api_never_add, True),
             ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/uploads"): (self.api_uploads, True),
+            ("POST", "/api/uploads/delete"): (self.api_uploads_delete, True),
+            ("POST", "/api/uploads/scan"): (self.api_uploads_scan, True),
+            ("POST", UPLOAD_PATH): (self.api_uploads_hint, True),
             ("GET", "/api/wpupdate"): (self.api_wpupdate, True),
             ("POST", "/api/wpupdate/start"): (self.api_wpupdate_start, True),
             ("POST", "/api/wpupdate/stop"): (self.api_wpupdate_stop, True),
@@ -197,11 +205,53 @@ class App:
         except Exception as exc:                                  # never show internals to the browser
             activity.write("ERROR", where=req.path, error=type(exc).__name__)
             resp = _json(500, {"ok": False, "message": "Something went wrong inside the panel.", "code": "error"})
+        return self._finish(resp, req)
+
+    def _finish(self, resp, req):
         resp.headers.extend(SECURITY_HEADERS)
         if self.secure_cookies:
             resp.headers.append(("Strict-Transport-Security", "max-age=31536000"))
         resp.headers.append(("Cache-Control", "no-store" if req.path.startswith("/api/") else "no-cache"))
         return resp
+
+    # ------------------------------------------------------------------ a file upload (the one request that is not small JSON)
+    def upload_gate(self, req, length):
+        """Everything that can be checked from the headers alone, BEFORE the file is read. None means: go ahead."""
+        if not self._host_ok(req):
+            return self._finish(_json(421, {"ok": False, "message": "Unknown address.", "code": "bad_host"}), req)
+        session = self.sessions.get(req.cookies.get(COOKIE))
+        if session is None:
+            return self._finish(_json(401, {"ok": False, "message": "Please sign in.", "code": "signed_out"}), req)
+        problem = self._csrf_problem(req, session)
+        if problem:
+            return self._finish(_json(403, {"ok": False, "message": problem, "code": "csrf"}), req)
+        if length <= 0:
+            return self._finish(_json(411, {"ok": False, "message": "Send the zip file as the body of the request.", "code": "no_file"}), req)
+        if length > MAX_UPLOAD:
+            return self._finish(_json(413, {"ok": False, "code": "too_big",
+                                            "message": "That file is bigger than the %d MB limit." % (MAX_UPLOAD // (1024 * 1024))}), req)
+        try:
+            free = shutil.disk_usage(self.engine.upload_dir()).free
+        except OSError:
+            free = 0
+        if free < length * 2 + 200 * 1024 * 1024:
+            return self._finish(_json(507, {"ok": False, "code": "no_space", "message": "The server does not have enough free disk space for that file."}), req)
+        return None
+
+    def upload_target(self):
+        """Where the file being received is written (inside the private upload folder; removed afterwards)."""
+        return os.path.join(self.engine.upload_dir(), "up-" + secrets.token_hex(8))
+
+    def handle_upload(self, req, path):
+        """The file has arrived in `path`. Check it and keep it."""
+        name = unquote(req.headers.get("x-file-name", ""))[:200]
+        try:
+            res = self.engine.uploads_add(path, name)
+        except Exception as exc:
+            activity.write("ERROR", where=req.path, error=type(exc).__name__)
+            return self._finish(_json(500, {"ok": False, "message": "Something went wrong inside the panel.", "code": "error"}), req)
+        activity.write("UPLOAD_ADD", ip=req.ip, file=name, ok=res.ok)
+        return self._finish(_result(res), req)
 
     @staticmethod
     def _host_name(header):
@@ -621,6 +671,22 @@ class App:
         res = self.engine.update_install(version)
         activity.write("UPDATE_INSTALL", ip=req.ip, version=version, ok=res.ok)
         return _result(res)
+
+    # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
+    def api_uploads(self, req, session):
+        return _json(200, self.engine.uploads_state())
+
+    def api_uploads_delete(self, req, session):
+        zid = _text(req.json().get("id"), 40)
+        res = self.engine.uploads_delete(zid)
+        activity.write("UPLOAD_DELETE", ip=req.ip, id=zid, ok=res.ok)
+        return _result(res)
+
+    def api_uploads_scan(self, req, session):
+        return _result(self.engine.uploads_scan())
+
+    def api_uploads_hint(self, req, session):
+        return _json(400, {"ok": False, "code": "bad_request", "message": "Send the zip file as the body of the request."})
 
     # ------------------------------------------------------------------ WordPress updates
     def api_updates(self, req, session):

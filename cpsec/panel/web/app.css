@@ -288,3 +288,16 @@ details.quiet { padding: .9rem 1.25rem; }
 @keyframes stripes { to { background-position: 1rem 0; } }
 tr.updating td { background: var(--surface-2); }
 @media (prefers-reduced-motion: reduce) { .dot-spin { animation-duration: 3s; } .bar.running .fill { animation: none; } }
+
+/* ---------- uploading plugin and theme files ---------- */
+.pad { padding-left: 1.25rem; padding-right: 1.25rem; }
+.drop { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; padding: 1rem 1.25rem; margin: 0 1.25rem 1rem; border: 2px dashed var(--line); border-radius: var(--radius); }
+.drop.over { border-color: var(--brand); background: var(--surface-2); }
+.sending { padding: .2rem 1.25rem .6rem; font-size: .92rem; }
+.sending .bar { margin-top: .35rem; border-radius: 3px; }
+.zipcard { border-top: 1px solid var(--line); padding: 1rem 1.25rem; }
+.zipcard .door-head .right { margin-left: auto; }
+.zipcard .table-wrap { margin: 0 -1.25rem; }
+.card-foot.row { padding: 1rem 1.25rem; }
+@media (max-width: 720px) { .drop, .sending, .zipcard, .card-foot.row, .pad { padding-left: 1rem; padding-right: 1rem; } .drop { margin-left: 1rem; margin-right: 1rem; } .zipcard .table-wrap { margin: 0 -1rem; } }
+.zipcard .door-head .badge { margin-left: 0; }

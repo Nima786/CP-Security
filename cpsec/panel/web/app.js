@@ -1046,6 +1046,107 @@
         : 'A website that failed stays on its old version and still works. A copy of every changed plugin and theme, and of the database, is kept in a folder next to the website (the last 3).' }));
   }
 
+
+  // the shared look of "this item is part of the running job": used in the list of waiting updates and on the cards of uploaded files
+  const jobStatusCell = ji => {
+    if (ji.status === 'working') return h('span', {}, workingBadge('Updating\u2026'), stepLine(ji));
+    if (ji.status === 'waiting') return badge('In line', '');
+    if (ji.status === 'done') return badge('updated', 'ok');
+    if (ji.status === 'skipped') return badge('skipped', '');
+    return badge('not updated', 'warn');
+  };
+
+  // ------------------------------------------------------------------ plugins and themes updated by uploading a file
+  const sizeText = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+
+  // one file, sent as it is (not wrapped), with a real progress figure
+  function sendFile(file, onProgress) {
+    return new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/uploads/upload');
+      xhr.setRequestHeader('X-CSRF-Token', S.csrf);
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+      xhr.setRequestHeader('Content-Type', 'application/zip');
+      xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+        if (xhr.status === 401 && S.me) { S.me = null; draw(); }
+        resolve({ ok: xhr.status === 200 && data.ok === true, message: data.message || 'The upload did not work (' + xhr.status + ').' });
+      };
+      xhr.onerror = () => resolve({ ok: false, message: 'The upload was interrupted. If you were signed out, sign in again and try once more.' });
+      xhr.send(file);
+    });
+  }
+
+  function renderUploads(up, ctl) {
+    const zips = up.zips || [];
+    const scanning = up.inventory && up.inventory.status === 'running';
+    const ticked = [];
+    const cards = zips.map(z => {
+      const shown = z.rows.filter(r => r.state !== 'missing');
+      const missing = z.rows.filter(r => r.state === 'missing').map(r => r.site);
+      const updatable = z.rows.filter(r => r.can_update);
+      const allOn = updatable.every(r => ctl.ticks[z.id + '|' + r.site] !== false);
+      const rows = shown.map(r => {
+        const key = z.id + '|' + r.site;
+        const ji = ctl.jobBy(r.site, z.kind, z.slug);
+        const on = r.can_update && ctl.ticks[key] !== false;
+        if (on && !ji) ticked.push({ z, r });
+        let result;
+        if (ji) result = jobStatusCell(ji);
+        else if (r.state === 'update') result = h('span', {}, badge('can be updated', 'ok'), ' \u2192 ', h('span', { class: 'mono', text: z.version }));
+        else if (r.state === 'same') result = h('span', { class: 'muted', text: 'already has this version' });
+        else if (r.state === 'newer') result = badge('has a newer version', 'warn');
+        else result = h('span', { class: 'muted', text: 'could not be read' });
+        return h('tr', { class: ji && ji.status === 'working' ? 'updating' : null },
+          h('td', { style: 'width:2.6rem' }, r.can_update && !ji ? h('input', { type: 'checkbox', checked: on, disabled: ctl.busy, 'aria-label': 'Update ' + r.site, onchange: ev => ctl.tick(key, ev.target.checked) }) : null),
+          h('td', { class: 'mono', text: r.site }),
+          h('td', {}, h('span', { class: 'mono', text: r.installed || '\u2013' }), r.status === 'inactive' ? [' ', badge('switched off', '')] : null),
+          h('td', {}, result));
+      });
+      return h('div', { class: 'zipcard' },
+        h('div', { class: 'door-head' }, kindBadge(z.kind), h('strong', { text: z.name }), h('span', { class: 'mono', text: z.version }),
+          z.careful ? badge('careful', 'warn') : null,
+          h('span', { class: 'right row' },
+            updatable.length > 1 ? h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: allOn ? 'Untick all' : 'Tick all', onclick: () => ctl.tickAll(z, !allOn) }) : null,
+            h('button', { class: 'btn small danger', type: 'button', disabled: ctl.busy, text: 'Delete file from the server', onclick: () => ctl.del(z) }))),
+        h('div', { class: 'muted small', style: 'margin:.3rem 0 .6rem' },
+          z.filename + ' \u00b7 ' + sizeText(z.size) + ' \u00b7 uploaded ' + z.uploaded + ' \u00b7 fingerprint ',
+          h('span', { class: 'mono', title: z.sha256, text: z.sha256.slice(0, 12) + '\u2026' }),
+          z.renamed_from ? ' \u00b7 the folder inside was called ' + z.renamed_from + ' and is renamed to ' + z.slug : null),
+        table(['Choose', 'Website', 'Has now', 'Result'], rows, scanning ? 'Looking at the websites\u2026' : 'No website has this ' + z.kind + ' yet.'),
+        missing.length ? h('div', { class: 'muted small', style: 'margin-top:.5rem', text: 'Not installed on ' + missing.length + ' website' + (missing.length > 1 ? 's' : '') + ' (nothing is installed where it is missing): ' + missing.join(', ') }) : null);
+    });
+
+    const input = h('input', { type: 'file', accept: '.zip,application/zip', multiple: true, hidden: true, id: 'up-file', 'aria-label': 'Choose zip files', onchange: ev => { ctl.pick(Array.from(ev.target.files)); ev.target.value = ''; } });
+    const drop = h('div', { class: 'drop' },
+      h('button', { class: 'btn primary', type: 'button', text: 'Choose zip files\u2026', onclick: () => input.click() }),
+      h('span', { class: 'muted', text: 'or drop them here. Up to ' + (up.max_mb || 200) + ' MB each.' }), input);
+    drop.addEventListener('dragover', ev => { ev.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', ev => { ev.preventDefault(); drop.classList.remove('over'); ctl.pick(Array.from(ev.dataTransfer.files)); });
+
+    const sending = (ctl.sending || []).map(s => h('div', { class: 'sending' },
+      h('div', { class: 'row' }, s.state === 'sending' || s.state === 'checking' ? h('span', { class: 'dot-spin', 'aria-hidden': 'true' }) : null,
+        h('strong', { text: s.name }), h('span', { class: s.state === 'bad' ? 'error' : 'muted', style: 'min-height:0', text:
+          s.state === 'sending' ? s.pct + '%' : s.state === 'checking' ? 'checking the file\u2026' : s.message })),
+      s.state === 'sending' || s.state === 'checking' ? h('div', { class: 'bar running', role: 'progressbar', 'aria-label': 'Upload of ' + s.name, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(s.pct) },
+        h('div', { class: 'fill', style: 'width:' + s.pct + '%' })) : null));
+
+    return h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'Update by uploading a file' }), zips.length ? badge(String(zips.length)) : null,
+        scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at what each website has\u2026') : null,
+        zips.length ? h('button', { class: 'btn small right', type: 'button', disabled: scanning || ctl.busy, text: 'Check the websites again', onclick: ctl.rescan }) : null),
+      h('p', { class: 'muted pad', style: 'margin:.9rem 0 .75rem', text: 'For plugins and themes that cannot update by themselves, such as paid ones. Upload the zip you got from the maker once, then choose the websites to update. Each website is saved first, checked afterwards and put back if it breaks. The file stays on the server until you delete it here.' }),
+      drop, sending,
+      cards,
+      ticked.length ? h('div', { class: 'card-foot row' },
+        h('button', { class: 'btn primary', type: 'button', disabled: ctl.busy, text: 'Update ' + ticked.length + ' ticked website' + (ticked.length > 1 ? 's' : '') + '\u2026',
+          onclick: () => ctl.apply(ticked) }),
+        h('span', { class: 'muted small', text: 'One at a time. Your files run on those websites, so use only files from the maker.' })) : null);
+  }
+
   function renderUpdates(state, ctl) {
     ctl = ctl || { busy: false, update: () => {}, recheck: () => {}, jobBy: () => null };
     const sites = state.sites || [];
@@ -1086,11 +1187,7 @@
           if (!updatable(i)) return null;
           const ji = ctl.jobBy ? ctl.jobBy(s.site, i.kind, i.slug) : null;
           if (!ji) return h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) });
-          if (ji.status === 'working') return h('span', {}, workingBadge('Updating\u2026'), stepLine(ji));
-          if (ji.status === 'waiting') return badge('In line', '');
-          if (ji.status === 'done') return badge('updated', 'ok');
-          if (ji.status === 'skipped') return badge('skipped', '');
-          return badge('not updated', 'warn');
+          return jobStatusCell(ji);
         };
         return h('section', { class: 'card flush' },
           h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
@@ -1114,6 +1211,11 @@
   async function viewUpdates() {
     let state = (await api('/api/updates')).data;
     let job = (await api('/api/wpupdate')).data;
+    let uploads = (await api('/api/uploads')).data;
+    const uploadHolder = h('div', {}, null);
+    const ticks = {};                       // 'file id|website' -> chosen or not (what can be updated starts chosen)
+    const seenFiles = new Set();
+    const sending = [];                     // the files being sent right now, with their progress
     const holder = h('div', {}, null);
     const jobHolder = h('div', {}, null);
     const button = h('button', { class: 'btn primary', type: 'button', text: 'Look for updates' });
@@ -1132,11 +1234,66 @@
     const paint = () => {
       jobHolder.replaceChildren(renderJob(job, stopJob) || '');
       holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running' || !!starting, update: askUpdate, recheck, jobBy }));
+      paintUploads();
       // the tab itself shows it too, for when you are looking at something else
       if (job.status === 'running') document.title = '\u27f3 Updating ' + (job.counts.done + job.counts.failed + job.counts.restored + job.counts.skipped) + ' of ' + job.items.length + ' \u2013 CP-Security';
       else if (document.title.startsWith('\u27f3')) document.title = 'WP Updates \u2013 CP-Security';
     };
-    // the progress is looked at every 2 seconds while updates run, and the list is read again when they finish
+    function paintUploads() {
+      (uploads.zips || []).forEach(z => {
+        if (seenFiles.has(z.id)) return;
+        seenFiles.add(z.id);
+        z.rows.forEach(r => { if (r.can_update) ticks[z.id + '|' + r.site] = true; });
+      });
+      uploadHolder.replaceChildren(renderUploads(uploads, {
+        busy: job.status === 'running' || !!starting, jobBy, ticks, sending,
+        tick: (key, on) => { ticks[key] = on; paintUploads(); },
+        tickAll: (z, on) => { z.rows.forEach(r => { if (r.can_update) ticks[z.id + '|' + r.site] = on; }); paintUploads(); },
+        pick: sendFiles, del: deleteFile, rescan: rescanWebsites, apply: applyFiles,
+      }));
+    }
+    // while the websites are being read, ask again every moment until it is done
+    const watchUploads = () => {
+      clearInterval(S.uploadTimer);
+      if (!(uploads.inventory && uploads.inventory.status === 'running')) return;
+      S.uploadTimer = setInterval(async () => {
+        if (S.view !== 'updates') { clearInterval(S.uploadTimer); return; }
+        uploads = (await api('/api/uploads')).data;
+        paintUploads();
+        if (uploads.inventory.status !== 'running') clearInterval(S.uploadTimer);
+      }, 1500);
+    };
+    async function refreshUploads() { uploads = (await api('/api/uploads')).data; paintUploads(); watchUploads(); }
+    async function sendFiles(files) {
+      for (const file of files) {
+        const item = { name: file.name, pct: 0, state: 'sending', message: '' };
+        sending.push(item);
+        paintUploads();
+        if (!/\.zip$/i.test(file.name)) { item.state = 'bad'; item.message = 'Choose a .zip file, exactly as you downloaded it.'; paintUploads(); continue; }
+        if (file.size > (uploads.max_mb || 200) * 1048576) { item.state = 'bad'; item.message = 'That file is bigger than the ' + (uploads.max_mb || 200) + ' MB limit.'; paintUploads(); continue; }
+        let last = 0;
+        const res = await sendFile(file, p => {
+          item.pct = Math.round(p * 100);
+          if (item.pct >= 100) item.state = 'checking';
+          if (Date.now() - last > 250 || item.pct >= 100) { last = Date.now(); paintUploads(); }
+        });
+        item.state = res.ok ? 'ok' : 'bad';
+        item.message = res.message;
+        toast(res.message, res.ok ? 'ok' : 'bad');
+        await refreshUploads();
+        if (res.ok) setTimeout(() => { const at = sending.indexOf(item); if (at >= 0) { sending.splice(at, 1); paintUploads(); } }, 8000);
+      }
+    }
+    async function deleteFile(z) {
+      if (!await confirmBox('Delete ' + z.name + ' ' + z.version + ' from the server?', 'Only the uploaded file is removed. The websites keep what was installed. You can upload it again later.', 'Delete the file', true)) return;
+      await act('/api/uploads/delete', { id: z.id });
+      await refreshUploads();
+    }
+    async function rescanWebsites() { await act('/api/uploads/scan', {}); await refreshUploads(); }
+    function applyFiles(chosen) {
+      askUpdate(chosen.map(({ z, r }) => ({ site: r.site, kind: z.kind, slug: z.slug, zip: z.id, what: z.name + ' (your upload)', from: r.installed, to: z.version, careful: z.careful })));
+    }
+    // the progress is looked at every second while updates run, and the list is read again when they finish
     const watch = () => {
       clearInterval(S.pollTimer);
       S.pollTimer = setInterval(async () => {
@@ -1145,6 +1302,7 @@
         job = (await api('/api/wpupdate')).data;
         if (was === 'running' && job.status !== 'running') {
           state = (await api('/api/updates')).data;
+          uploads = (await api('/api/uploads')).data;
           clearInterval(S.pollTimer);
           toast(job.counts.failed + job.counts.restored ? 'Updates finished. Some need a look.' : 'Updates finished.', job.counts.failed + job.counts.restored ? 'bad' : 'ok');
         }
@@ -1158,11 +1316,12 @@
         h('p', { text: 'These will be updated now, one after the other:' }),
         h('ul', { class: 'plain' }, items.map(i => h('li', {}, h('span', { class: 'mono', text: i.site }), ' \u2013 ' + i.what + ' ', h('span', { class: 'mono muted', text: i.from + ' \u2192 ' + i.to })))),
         careful.length ? h('p', { class: 'error', style: 'min-height:0', text: 'Careful: ' + careful.map(i => i.what).join(', ') + ' can change how a shop or a page looks and works. If you have a test copy of this website, update that one first.' }) : null,
+        items.some(i => i.zip) ? h('p', { class: 'small', text: 'The files come from your upload, not from WordPress.org. They run on those websites, so use only files you got from the plugin or theme\u2019s maker.' }) : null,
         h('p', { class: 'muted small', text: 'Before each update a copy of the files is saved, and once per website a copy of the database. Afterwards the website is checked. If it does not work, the old version is put back and you are told. Putting files back cannot undo changes an update made to the database; that is what the database copy is for.' }));
       if (!await dialog({ title: 'Update ' + items.length + ' item' + (items.length > 1 ? 's' : '') + '?', content, ok: 'Start updating' })) return;
       starting = new Set(items.map(i => keyOf(i.site, i.kind, i.slug)));
       paint();
-      const r = await act('/api/wpupdate/start', { items: items.map(i => ({ site: i.site, kind: i.kind, slug: i.slug })), confirmed: true });
+      const r = await act('/api/wpupdate/start', { items: items.map(i => i.zip ? { site: i.site, kind: i.kind, slug: i.slug, zip: i.zip } : { site: i.site, kind: i.kind, slug: i.slug }), confirmed: true });
       if (r.ok) { await showJob(); starting = null; paint(); watch(); } else { starting = null; paint(); }
     }
 
@@ -1202,10 +1361,11 @@
       if (!r.ok) button.disabled = false;
     });
     paint();
+    watchUploads();
     if (state.status === 'running') { button.disabled = true; poll(); } else if ((state.checking || []).length) pollChecking(); else if (job.status === 'running') watch();
     return h('div', { class: 'stack' },
       pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. Nothing is updated unless you press an Update button: there are no automatic updates.', button),
-      jobHolder, holder,
+      jobHolder, uploadHolder, holder,
       h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website.' }));
   }
   // ------------------------------------------------------------------ settings

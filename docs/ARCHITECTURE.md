@@ -123,6 +123,15 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
   an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
   the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **Uploaded plugin and theme zips (`library.py`).** The panel never unpacks or runs a zip. It checks the zip's table of contents
+  (one folder, a plugin or theme header with a version, no unsafe paths, links, passwords; limits on size, count and unpacked size),
+  keeps it in `/var/lib/cp-security/uploads` (root only, 700/600) and, for an update, pipes it into the website's own
+  `cps-backups` folder through `su` as the website's user (`util.run_with_file`), checks its SHA-256 there, lets WP-CLI
+  (`plugin|theme install <zip> --force`, the same as "replace current with uploaded") unpack it as that user, and removes the
+  copy whatever happened. The update itself is `wpupdate.update_one(..., upload=entry)`: the same copy, check, roll back and
+  cache clearing as every other update. The upload request is the only one allowed to be larger than 64 KB: `server.py`
+  gates it from the headers (host, session, secret token, size, free disk) BEFORE reading the body, then streams it to a private
+  temporary file and removes that whatever happens.
 * **Refused-port counts** come from per-port dynamic sets in the firewall table (`refused_tcp`, `refused_udp`, one hour
   timeout). They restart on a reload. If this nftables rejects the counters, the file is written without them and the
   firewall still works.

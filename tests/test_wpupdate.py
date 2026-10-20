@@ -25,6 +25,9 @@ class FakeWordPress:
         self.saved = {}                     # copy path -> version when it was saved
         self.admin = ""                     # the administrator's number, as WP-CLI would print it
         self.own_server = set()             # keys WordPress.org knows nothing about: only found when plugins are loaded
+        self.install_key = "plugin:woo"     # what an uploaded file installs
+        self.install_version = "2.0"
+        self.install_mode = None            # 'fail' | 'nochange'
         self.admin_area_only = set()        # keys that only update when WordPress believes it is inside wp-admin
         self.area_crashes = False           # loading plugins inside wp-admin makes WP-CLI fail
 
@@ -70,6 +73,12 @@ class FakeWordPress:
                 if name in script:
                     self.versions.update(snapshot)
             return 0, ""
+        if " install " in script and "--force" in script:
+            if self.install_mode == "fail":
+                return 1, "Error: Could not create directory.\n"
+            if self.install_mode != "nochange":
+                self.versions[self.install_key] = self.install_version
+            return 0, "Success: Installed 1 of 1 plugins.\n"
         key = self.key_in(script)
         if key and " get " in script and "--field=version" in script:
             return 0, "Warning: something noisy\n" + self.versions[key] + "\n"
@@ -530,11 +539,11 @@ class SomethingIsVisiblyHappening(UpdateCase):
         release, reached = threading.Event(), threading.Event()
         real = wpupdate.update_one
 
-        def slow(domain, kind, slug, db_saved=False, stamp=None, progress=None):
+        def slow(domain, kind, slug, db_saved=False, stamp=None, progress=None, upload=None):
             progress("Installing the new version")
             reached.set()
             release.wait(5)
-            return real(domain, kind, slug, db_saved=db_saved, stamp=stamp, progress=progress)
+            return real(domain, kind, slug, db_saved=db_saved, stamp=stamp, progress=progress, upload=upload)
         self.patch("cpsec.wpupdate.update_one", side_effect=slow)
         wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo"}, {"site": DOMAIN, "kind": "theme", "slug": "blocksy"}])
         self.assertTrue(reached.wait(5))
@@ -550,3 +559,152 @@ class SomethingIsVisiblyHappening(UpdateCase):
         self.wait()
         done = wpupdate.state()["items"]
         self.assertTrue(all(i["step"] == "" and i["seconds"] == 0 for i in done), "nothing is shown as busy afterwards")
+
+
+ENTRY = {"id": "0123456789abcdef", "kind": "plugin", "slug": "woo", "name": "Woo", "version": "2.0", "sha256": "0" * 64}
+SENT = "/home/%s/cps-backups/upload-0123456789abcdef.zip" % DOMAIN
+
+
+class UpdatingFromAnUploadedFile(UpdateCase):
+    """The owner uploaded the maker's zip; the website's plugin is replaced with it, with the same safety as any other update."""
+
+    def setUp(self):
+        super().setUp()
+        self.discarded = []
+        self.patch("cpsec.wpupdate.library.deliver", return_value=(SENT, ""))
+        self.patch("cpsec.wpupdate.library.discard", side_effect=lambda site, path: self.discarded.append(path))
+        self.patch("cpsec.wpupdate.library.get", side_effect=lambda zid: dict(ENTRY) if zid == ENTRY["id"] else None)
+
+    def installs(self):
+        return [s for s in self.wp.script_log if " install " in s]
+
+    def test_the_plugin_is_replaced_with_the_uploaded_file_and_checked(self):
+        steps = []
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY), progress=steps.append)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((r["from"], r["to"]), ("1.0", "2.0"))
+        self.assertIn("with the file you uploaded", r["message"])
+        self.assertEqual(len(self.installs()), 1)
+        self.assertIn("plugin install", self.installs()[0])
+        self.assertIn(SENT, self.installs()[0])
+        self.assertIn("--force", self.installs()[0])
+        self.assertFalse(self.calls(" plugin update "), "WordPress.org is not asked at all")
+        self.assertIn("Installing the uploaded version", steps)
+        self.assertIn("Sending the uploaded file to the website", steps)
+
+    def test_the_copy_and_the_database_are_saved_first_like_for_any_update(self):
+        wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        order = [("copy" if "mkdir -p -m 700" in s and "cp -a" in s else "db" if "db export" in s else "install" if " install " in s else None)
+                 for s in self.wp.script_log]
+        self.assertEqual([o for o in order if o], ["copy", "db", "install"])
+
+    def test_the_websites_copy_of_the_file_never_stays_behind(self):
+        wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertEqual(self.discarded, [SENT])
+        self.wp.install_mode = "fail"
+        self.wp.versions["plugin:woo"] = "1.0"
+        self.discarded.clear()
+        wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertEqual(self.discarded, [SENT], "also when the install fails")
+
+    def test_the_same_version_or_a_newer_one_on_the_website_is_left_alone(self):
+        for have in ("2.0", "2.5"):
+            self.wp.versions["plugin:woo"] = have
+            before = len(self.wp.script_log)
+            r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+            self.assertFalse(r["ok"])
+            self.assertTrue(r["skipped"])
+            self.assertIn("nothing was changed", r["message"])
+            self.assertEqual(self.installs(), [])
+            self.assertFalse([s for s in self.wp.script_log[before:] if "cp -a" in s], "no copy is even made")
+
+    def test_a_file_that_cannot_be_sent_changes_nothing(self):
+        self.patch("cpsec.wpupdate.library.deliver", return_value=("", "The file could not be sent to the website (no space)."))
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertFalse(r["ok"])
+        self.assertIn("could not be sent", r["message"])
+        self.assertEqual(self.installs(), [])
+        self.assertEqual(self.wp.versions["plugin:woo"], "1.0")
+
+    def test_if_the_website_breaks_the_old_version_is_put_back(self):
+        self.wp.broken = {"plugin:woo"}
+        self.wp.update_to["plugin:woo"] = "2.0"                # the fake website breaks once this version is on it
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertTrue(r["restored"])
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.wp.versions["plugin:woo"], "1.0")
+        self.assertIn("old version 1.0 was put back", r["message"])
+
+    def test_a_failed_install_says_why_and_leaves_the_old_version(self):
+        self.wp.install_mode = "fail"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertFalse(r["ok"])
+        self.assertIn("Could not create directory", r["message"])
+        self.assertIn("stays on version 1.0", r["message"])
+
+    def test_an_install_that_changes_nothing_is_reported_plainly(self):
+        self.wp.install_mode = "nochange"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertFalse(r["ok"])
+        self.assertIn("did not replace the files with the uploaded ones", r["message"])
+
+    def test_a_different_version_than_the_file_says_is_noted(self):
+        self.wp.install_version = "2.0.1"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", upload=dict(ENTRY))
+        self.assertTrue(r["ok"])
+        self.assertTrue([n for n in r["notes"] if "2.0.1" in n and "2.0" in n])
+
+
+class UploadedFilesInTheJob(UpdateCase):
+    def setUp(self):
+        super().setUp()
+        self.patch("cpsec.wpupdate.library.deliver", return_value=(SENT, ""))
+        self.patch("cpsec.wpupdate.library.discard")
+        self.entries = {ENTRY["id"]: dict(ENTRY)}
+        self.patch("cpsec.wpupdate.library.get", side_effect=lambda zid: dict(self.entries[zid]) if isinstance(zid, str) and zid in self.entries else None)
+
+    def test_the_list_from_the_page_may_carry_the_file(self):
+        clean, err = wpupdate.check_items([{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ENTRY["id"]}])
+        self.assertEqual(err, "")
+        self.assertEqual(clean, [{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ENTRY["id"]}])
+
+    def test_a_file_that_is_not_there_or_not_for_that_plugin_is_refused(self):
+        clean, err = wpupdate.check_items([{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": "ffffffffffffffff"}])
+        self.assertIsNone(clean)
+        self.assertIn("no longer on the server", err)
+        clean, err = wpupdate.check_items([{"site": DOMAIN, "kind": "plugin", "slug": "other", "zip": ENTRY["id"]}])
+        self.assertIsNone(clean)
+        self.assertIn("not the plugin you chose", err)
+        clean, err = wpupdate.check_items([{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ["x"]}])
+        self.assertIsNone(clean)
+
+    def test_the_job_updates_from_the_file_and_the_row_says_updated(self):
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ENTRY["id"]}])
+        self.wait()
+        st = wpupdate.state()
+        self.assertEqual([i["status"] for i in st["items"]], ["done"])
+        self.assertEqual((st["items"][0]["from"], st["items"][0]["to"]), ("1.0", "2.0"))
+
+    def test_a_site_that_already_has_it_is_shown_as_skipped_not_failed(self):
+        self.wp.versions["plugin:woo"] = "2.0"
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ENTRY["id"]}])
+        self.wait()
+        st = wpupdate.state()
+        self.assertEqual(st["items"][0]["status"], "skipped")
+        self.assertEqual(st["counts"]["skipped"], 1)
+        self.assertEqual(st["counts"]["failed"], 0)
+
+    def test_a_file_deleted_while_the_job_waits_changes_nothing(self):
+        calls = []
+
+        def first_item_deletes_the_file(domain, kind, slug, **kwargs):
+            calls.append(slug)
+            self.entries.clear()                                  # the owner deletes the upload while the first item is running
+            return {"ok": True, "restored": False, "skipped": False, "from": "1", "to": "2", "message": "ok", "notes": [], "db_attempted": True}
+        self.patch("cpsec.wpupdate.update_one", side_effect=first_item_deletes_the_file)
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "other"}, {"site": DOMAIN, "kind": "plugin", "slug": "woo", "zip": ENTRY["id"]}])
+        self.wait()
+        st = wpupdate.state()
+        self.assertEqual(calls, ["other"], "the second item never reached the update")
+        self.assertEqual([i["status"] for i in st["items"]], ["done", "failed"])
+        self.assertIn("deleted from the server before its turn", st["items"][1]["message"])

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0
+* **Update plugins and themes by uploading the maker's zip.** For the ones that cannot update by themselves (paid plugins, ones
+  whose licence server refuses, custom ones). On the WP Updates page, "Update by uploading a file": choose one or several zip
+  files (or drop them), with a real progress figure. Each zip is checked and kept on the server; it stays there until you
+  delete it from the panel ("Delete file from the server"). The panel reads the name and version inside and lists every
+  website that already has that plugin or theme: the version it has now, whether it is switched on, and whether the file is newer,
+  the same or older. The ones that can be updated start ticked. One button updates everything ticked (several plugins across
+  several websites in one run), one website at a time, with the same safety as the other updates: the website must answer first,
+  a copy of the files and (once per website) the database is saved, the files are replaced, the website is checked again, and the old
+  version is put back if it breaks. The same spinners, steps and progress bar are shown.
+* **What it will not do:** it never installs on a website that did not have the plugin; it never goes back to an older version
+  (a website that has the same or a newer version is left alone and says so); WordPress itself is not included.
+* **Safety of the file.** A zip is refused unless it is a real zip with exactly one folder holding a plugin or theme with a version
+  number. Paths that could write outside the folder, links, passwords, too many files, and a zip that unpacks to over 1 GB are
+  refused; files above 200 MB are refused from the request header before they are read. A folder packed as "name-1.7.6" is renamed to "name"
+  (what WordPress needs) and the page says so. The panel never unpacks or runs anything from a zip: WordPress's own tool does, as the
+  website's own user. The files are kept in a folder only root can open; each website gets its copy through a pipe written by its own
+  user (so a hacked website cannot make root write elsewhere and other websites cannot read it), the copy is checked against the
+  fingerprint and removed whatever happens. A newer upload of the same plugin replaces the older one.
+* The panel now accepts one kind of large request (the zip, sent as the raw body and written to disk in pieces after the session,
+  the secret token and the size have been checked); every other request is still limited to 64 KB.
+
 ## 0.7.2
 * **You can see an update happening.** While plugins or themes are being updated on the WP Updates page:
   the moment you confirm, the rows show "Starting"; the item being updated shows a turning circle, "Updating" and a plain line

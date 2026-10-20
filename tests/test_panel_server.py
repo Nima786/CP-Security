@@ -29,7 +29,7 @@ def free_port():
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl is needed to make a throw-away certificate")
-class RealStart(EnvTestCase):
+class RealPanel(EnvTestCase):
     def setUp(self):
         super().setUp()
         self.port = free_port()
@@ -67,6 +67,10 @@ class RealStart(EnvTestCase):
         raw = resp.read()
         return resp, (json.loads(raw) if raw[:1] in (b"{", b"[") else raw)
 
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl is needed to make a throw-away certificate")
+class RealStart(RealPanel):
     def test_the_panel_starts_finds_its_certificate_and_answers_over_https(self):
         _, (cert, key) = self.start()
         self.assertTrue(cert.endswith("/%s/fullchain.pem" % DOMAIN), "found where CyberPanel puts it")
@@ -167,3 +171,120 @@ class RealStart(EnvTestCase):
         shutil.rmtree("%s/%s" % (config.P.letsencrypt_live, DOMAIN))
         with self.assertRaises((OSError, FileNotFoundError)):
             self.start()
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl is needed to make a throw-away certificate")
+class UploadingOverTheRealConnection(RealPanel):
+    """A zip is sent as the raw body over real HTTPS: checked before it is read, written to disk in pieces, never kept half-done."""
+
+    PLUGIN = b"<?php\n/*\nPlugin Name: Big One\nVersion: 2.5\n*/\n"
+
+    def make_zip(self, padding=0):
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            z.writestr("bigone/bigone.php", self.PLUGIN)
+            if padding:
+                z.writestr("bigone/data.bin", bytes(range(256)) * (padding // 256))
+        return buf.getvalue()
+
+    def sign_in(self):
+        self.server, _ = self.start()
+        resp, data = self.call("POST", "/api/login", {"username": "owner", "password": PASSWORD})
+        return resp.getheader("Set-Cookie").split(";")[0], data["csrf"]
+
+    def send(self, body, cookie="", csrf="", declared=None, extra=None, name="Big One 2.5.zip"):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection("127.0.0.1", self.port, context=ctx, timeout=15)
+        headers = {"Host": DOMAIN, "Content-Type": "application/zip", "X-File-Name": name}
+        if cookie:
+            headers["Cookie"] = cookie
+        if csrf:
+            headers["X-CSRF-Token"] = csrf
+        headers.update(extra or {})
+        conn.putrequest("POST", "/api/uploads/upload", skip_accept_encoding=True)
+        for k, v in headers.items():
+            conn.putheader(k, v)
+        conn.putheader("Content-Length", str(len(body) if declared is None else declared))
+        conn.endheaders()
+        return conn, body
+
+    def finish(self, conn, body):
+        try:
+            conn.send(body)
+        except OSError:
+            pass
+        resp = conn.getresponse()
+        raw = resp.read()
+        return resp, (json.loads(raw) if raw[:1] == b"{" else raw)
+
+    def leftovers(self):
+        import os
+        folder = self.server.app.engine.upload_dir()
+        return [n for n in os.listdir(folder) if n.startswith("up-")]
+
+    def test_a_file_is_streamed_to_disk_checked_and_listed(self):
+        cookie, csrf = self.sign_in()
+        body = self.make_zip(padding=3 * 1024 * 1024)
+        conn, body = self.send(body, cookie, csrf)
+        resp, data = self.finish(conn, body)
+        self.assertEqual((resp.status, data["ok"]), (200, True), data)
+        self.assertIn("Big One 2.5 is ready", data["message"])
+        self.assertEqual(self.leftovers(), [], "the temporary file is gone")
+        listing = self.call("GET", "/api/uploads", headers={"Cookie": cookie})[1]
+        self.assertEqual([(z["name"], z["version"]) for z in listing["zips"]], [("Big One", "2.5")])
+
+    def test_nobody_can_upload_without_signing_in_and_nothing_is_written(self):
+        cookie, csrf = self.sign_in()
+        for cookie_, csrf_, status in (("", "", 401), (cookie, "", 403), (cookie, "wrong", 403)):
+            conn, body = self.send(self.make_zip(), cookie_, csrf_)
+            resp, data = self.finish(conn, body)
+            self.assertEqual(resp.status, status, (cookie_, csrf_))
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.call("GET", "/api/uploads", headers={"Cookie": cookie})[1]["zips"], [])
+
+    def test_a_huge_file_is_refused_from_its_header_alone(self):
+        cookie, csrf = self.sign_in()
+        conn, _ = self.send(b"", cookie, csrf, declared=5 * 1024 * 1024 * 1024)
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 413)
+        self.assertIn(b"200 MB", resp.read())
+
+    def test_a_missing_length_is_refused(self):
+        cookie, csrf = self.sign_in()
+        conn, body = self.send(b"", cookie, csrf, declared=0)
+        resp, data = self.finish(conn, body)
+        self.assertEqual(resp.status, 411)
+
+    def test_an_upload_that_is_cut_short_leaves_nothing_behind(self):
+        cookie, csrf = self.sign_in()
+        conn, _ = self.send(b"", cookie, csrf, declared=100000)
+        self.addCleanup(conn.close)
+        conn.send(b"PK\x03\x04 only a few bytes")
+        conn.sock.shutdown(socket.SHUT_WR)
+        try:
+            resp = conn.getresponse()
+            self.assertIn(resp.status, (400,))
+        except (http.client.HTTPException, OSError):
+            pass
+        import time
+        time.sleep(0.3)
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.call("GET", "/api/uploads", headers={"Cookie": cookie})[1]["zips"], [])
+
+    def test_something_that_is_not_a_plugin_is_refused_after_arriving_and_removed(self):
+        cookie, csrf = self.sign_in()
+        conn, body = self.send(b"this is not a zip file at all", cookie, csrf)
+        resp, data = self.finish(conn, body)
+        self.assertEqual(resp.status, 400)
+        self.assertIn("not a zip file", data["message"])
+        self.assertEqual(self.leftovers(), [])
+
+    def test_the_panel_still_answers_afterwards(self):
+        cookie, csrf = self.sign_in()
+        conn, body = self.send(self.make_zip(), cookie, csrf)
+        self.finish(conn, body)
+        self.assertEqual(self.call("GET", "/api/me", headers={"Cookie": cookie})[0].status, 200)

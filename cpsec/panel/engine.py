@@ -7,10 +7,12 @@ Every method returns plain data (dicts, lists) or a util.Result.
 """
 import copy
 import datetime
+import os
+import secrets
 import threading
 import time
 
-from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, netinfo, ports, provision,
+from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, library, netinfo, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -414,6 +416,10 @@ class LiveEngine:
             return busy
         with self._job_lock:
             titles = {(s["site"], i["kind"], i.get("slug", "")): i["what"] for s in self._updates.get("sites", []) for i in s.get("items", [])}
+        for it in items if isinstance(items, list) else []:                  # files the owner uploaded are named after the file
+            entry = library.get(it.get("zip")) if isinstance(it, dict) and it.get("zip") else None
+            if entry:
+                titles[(it.get("site"), entry["kind"], entry["slug"])] = "%s (your upload, %s)" % (entry["name"], entry["version"])
         return wpupdate.start(items, titles, on_item=self._wpupdate_logged, on_done=self._wpupdate_done)
 
     def wpupdate_stop(self):
@@ -421,7 +427,8 @@ class LiveEngine:
 
     def _wpupdate_logged(self, item):
         from . import activity
-        activity.write("WP_UPDATE", site=item["site"], kind=item["kind"], slug=item["slug"], status=item["status"])
+        activity.write("WP_UPDATE", site=item["site"], kind=item["kind"], slug=item["slug"], status=item["status"],
+                       source="upload" if item.get("zip") else "automatic")
 
     def _store_entry(self, entry):
         """Put one website's fresh entry into the saved list."""
@@ -436,10 +443,47 @@ class LiveEngine:
 
     def _wpupdate_done(self, touched):
         """Look at the websites again so the list shows what is still waiting. The job is not "finished" until this returns."""
+        library.inventory_refresh(touched)                    # the cards of the uploaded files show what the websites have now
         for name in touched:
             entry = updates.look_one(name)
             if entry is not None:
                 self._store_entry(entry)
+
+    # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
+    def upload_dir(self):
+        library.prepare()
+        return library.incoming_dir()
+
+    def uploads_state(self):
+        zips = library.list_zips()
+        inv = library.inventory_state()
+        if zips and inv["status"] == "idle":                   # first look after a restart of the panel
+            library.inventory_start()
+            inv = library.inventory_state()
+        try:
+            names = sorted(n for _d, _u, n in updates._wordpress_sites())
+        except (ImportError, OSError):                          # not a Linux server: there are no websites to list
+            names = []
+        for z in zips:
+            z["rows"] = library.rows_for(z, inv["sites"], names)
+            z["careful"] = updates.is_careful(z["slug"], z["name"])
+        return {"zips": zips, "inventory": {"status": inv["status"], "finished": inv["finished"]},
+                "max_mb": library.MAX_ZIP // (1024 * 1024)}
+
+    def uploads_add(self, tmp_path, filename):
+        res, _entry = library.add(tmp_path, filename)
+        if res.ok and library.inventory_state()["status"] == "idle":
+            library.inventory_start()
+        return res
+
+    def uploads_delete(self, zid):
+        job = wpupdate.state()
+        if job["status"] == "running" and any(i.get("zip") == zid and i["status"] in ("waiting", "working") for i in job["items"]):
+            return Result(False, "That file is being used by the updates that are running now. Delete it when they have finished.", "busy")
+        return library.delete(zid)
+
+    def uploads_scan(self):
+        return library.inventory_start()
 
     # ------------------------------------------------------------------ updates (read-only, slow: runs in the background)
     def updates_state(self):
@@ -543,6 +587,7 @@ class DemoEngine:
                         {"address": "45.60.0.30", "label": "Added by owner", "is_home": False}]
         self.never = [{"address": "104.16.0.0/13", "label": "Cloudflare"}, {"address": "172.64.0.0/13", "label": "Cloudflare"}]
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
+        self.up_zips, self.up_installed = [], {}              # uploaded plugin and theme files, and what the websites have after an update
         self.fw_enabled, self.fw_rules, self.fw_next, self.fw_pending_until, self.fw_previous = False, [], 1, 0.0, None
         self.wp_job = None
         self.h_cfg = {"defaults": dict(headers.DEFAULTS), "sites": {}}
@@ -1109,6 +1154,62 @@ class DemoEngine:
     WP_DEMO_STEPS = ["Checking that the website answers normally", "Saving a copy of the plugin files",
                      "Installing the new version", "Checking the website again"]
 
+    # ------------------------------------------------------------------ uploaded plugin and theme files (made-up server)
+    DEMO_SITES = ["blog.example.com", "example.org", "shop.example.com", "staging.example.com"]
+
+    def upload_dir(self):
+        import tempfile
+        path = os.path.join(tempfile.gettempdir(), "cps-demo-uploads")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _demo_rows(self, z):
+        """Made-up: the shop is behind, the blog is behind and switched off, staging is ahead, example.org cannot be read."""
+        have = {"shop.example.com": ("0.9.0", "active"), "blog.example.com": ("0.9.5", "inactive"), "staging.example.com": ("99.0", "active")}
+        rows = []
+        for name in self.DEMO_SITES:
+            if name == "example.org":
+                rows.append({"site": name, "state": "unknown", "installed": "", "status": "", "can_update": False})
+                continue
+            version, status = self.up_installed.get((z["id"], name)) or have[name]
+            c = library.version_cmp(z["version"], version)
+            state = "update" if c > 0 else ("same" if c == 0 else "newer")
+            rows.append({"site": name, "state": state, "installed": version, "status": status, "can_update": state == "update"})
+        order = {"update": 0, "same": 1, "newer": 2, "unknown": 3, "missing": 4}
+        return sorted(rows, key=lambda r: (order[r["state"]], r["site"]))
+
+    def uploads_state(self):
+        zips = copy.deepcopy(self.up_zips)
+        for z in zips:
+            z["rows"] = self._demo_rows(z)
+            z["careful"] = updates.is_careful(z["slug"], z["name"])
+        return {"zips": sorted(zips, key=lambda z: z["name"].lower()), "inventory": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "max_mb": 200}
+
+    def uploads_add(self, tmp_path, filename):
+        info, err = library.inspect_zip(tmp_path)
+        if err:
+            return Result(False, err, "invalid")
+        entry = {"id": secrets.token_hex(8), "filename": os.path.basename(filename or "upload.zip")[:120], "kind": info["kind"],
+                 "slug": info["slug"], "name": info["name"], "version": info["version"], "size": info["size"],
+                 "sha256": library._sha256(tmp_path), "uploaded": time.strftime("%Y-%m-%d %H:%M"),
+                 "renamed_from": info["folder"] if info["renamed"] else ""}
+        replaced = [z for z in self.up_zips if z["kind"] == entry["kind"] and z["slug"] == entry["slug"]]
+        self.up_zips = [z for z in self.up_zips if z not in replaced] + [entry]
+        msg = "%s %s is ready." % (entry["name"], entry["version"])
+        if replaced:
+            msg += " It replaces the earlier upload of version %s." % replaced[0]["version"]
+        return Result(True, msg)
+
+    def uploads_delete(self, zid):
+        found = [z for z in self.up_zips if z["id"] == zid]
+        if not found:
+            return Result(False, "That file is not on the server any more.", "missing")
+        self.up_zips = [z for z in self.up_zips if z["id"] != zid]
+        return Result(True, "%s %s was deleted from the server. The websites keep what was installed." % (found[0]["name"], found[0]["version"]))
+
+    def uploads_scan(self):
+        return Result(True, "Looking at the websites.")
+
     def wpupdate_start(self, items):
         if self.wp_job and not self.wp_job.get("finished"):
             return Result(False, "Updates are already running. Wait for them to finish.", "busy")
@@ -1118,6 +1219,14 @@ class DemoEngine:
         rows = []
         for it in items:
             key = (it.get("site"), it.get("kind"), it.get("slug"))
+            if it.get("zip"):
+                z = next((x for x in self.up_zips if x["id"] == it["zip"]), None)
+                row = next((r for r in self._demo_rows(z) if r["site"] == key[0]), None) if z else None
+                if not z or not row or key[1:] != (z["kind"], z["slug"]) or not row["can_update"]:
+                    return Result(False, "That uploaded file cannot be used there.", "invalid")
+                rows.append(dict(site=key[0], kind=key[1], slug=key[2], zip=z["id"], title="%s (your upload, %s)" % (z["name"], z["version"]),
+                                 status="waiting", message="", **{"from": row["installed"], "to": z["version"]}))
+                continue
             if key not in known or it.get("kind") not in ("plugin", "theme"):
                 return Result(False, "That is not something that is waiting for an update.", "invalid")
             rows.append(dict(site=key[0], kind=key[1], slug=key[2], title=known[key]["what"], status="waiting", message="",
@@ -1156,6 +1265,9 @@ class DemoEngine:
         if all(i["status"] in ("done", "failed", "restored", "skipped") for i in job["items"]) and not job["finished"]:
             job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
             done = {(i["site"], i["kind"], i["slug"]) for i in job["items"] if i["status"] == "done"}
+            for i in job["items"]:
+                if i["status"] == "done" and i.get("zip"):
+                    self.up_installed[(i["zip"], i["site"])] = (i["to"], "active")
             for s in self.updates["sites"]:
                 s["items"] = [i for i in s["items"] if (s["site"], i["kind"], i.get("slug", "")) not in done]
         out = copy.deepcopy(job)

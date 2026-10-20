@@ -23,6 +23,19 @@ def run(cmd, timeout=60):
         return 127, "not installed"
 
 
+def run_with_file(cmd, path, timeout=600):
+    """Like run, but the file's contents are fed to the command's standard input. Used to let another user write a copy of it."""
+    try:
+        with open(path, "rb") as f:
+            p = subprocess.run(cmd, stdin=f, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               universal_newlines=True, timeout=timeout)
+        return p.returncode, p.stdout
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    except OSError as exc:
+        return 127, str(exc)
+
+
 def read_text(path, default=""):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:

@@ -28,6 +28,7 @@ class Paths:
         self.tls_dir = self.conf_dir + "/tls"
         self.nft_file = self.conf_dir + "/admin-lock.nft"
         self.updates_cache = self.conf_dir + "/updates-cache.json"
+        self.upload_dir = j("/var/lib/cp-security/uploads")                  # plugin and theme zips the owner uploaded (root only)
         self.blocker_settings = self.conf_dir + "/blocker.json"
         self.legacy_conf_dir = j("/etc/pb-security")
 

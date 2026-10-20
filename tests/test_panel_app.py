@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates",
+                 "/api/updates", "/api/uploads",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -826,3 +826,145 @@ class PanelUpdateRoutes(PanelCase):
         _, me = self.request("GET", "/api/me")
         from cpsec import __version__
         self.assertEqual(me["version"], __version__)
+
+
+class UploadedFiles(PanelCase):
+    """Plugin and theme zips the owner uploads, and the updates made from them."""
+
+    PLUGIN = "<?php\n/*\nPlugin Name: Bricks Extras\nVersion: %s\n*/\n"
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+        self.engine.WP_DEMO_SECONDS = 0.01
+
+    def make_zip(self, version="1.7.6", name="up.zip", folder="bricksextras"):
+        import os
+        import zipfile
+        path = os.path.join(self.root, name)
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("%s/%s.php" % (folder, folder.split("-")[0]), self.PLUGIN % version)
+        return path
+
+    def headers(self, **extra):
+        h = {"host": HOST, "cookie": self.cookie, "x-csrf-token": self.csrf, "x-file-name": "Bricks%20Extras%201.7.6.zip"}
+        h.update(extra)
+        return h
+
+    def gate(self, length=1000, **extra):
+        return self.app.upload_gate(Request("POST", "/api/uploads/upload", self.headers(**extra), b"", "45.60.0.10"), length)
+
+    def upload(self, path=None, **extra):
+        path = path or self.make_zip()
+        resp = self.app.handle_upload(Request("POST", "/api/uploads/upload", self.headers(**extra), b"", "45.60.0.10"), path)
+        return resp, json.loads(resp.body.decode())
+
+    def test_the_gate_lets_a_signed_in_owner_with_a_sensible_size_through(self):
+        self.assertIsNone(self.gate(1000))
+
+    def test_the_gate_refuses_before_any_of_the_file_is_read(self):
+        self.assertEqual(self.gate(cookie="").status, 401)
+        self.assertEqual(self.gate(**{"x-csrf-token": "wrong"}).status, 403)
+        self.assertEqual(self.gate(**{"x-csrf-token": ""}).status, 403)
+        self.assertEqual(self.gate(host="evil.example.net").status, 421)
+        self.assertEqual(self.gate(0).status, 411)
+        self.assertEqual(self.gate(-1).status, 411)
+        refused = self.gate(300 * 1024 * 1024)
+        self.assertEqual(refused.status, 413)
+        self.assertIn("200 MB", json.loads(refused.body.decode())["message"])
+
+    def test_the_gate_refuses_when_the_disk_would_fill_up(self):
+        from collections import namedtuple
+        from unittest import mock
+        usage = namedtuple("usage", "total used free")
+        with mock.patch("cpsec.panel.app.shutil.disk_usage", return_value=usage(10, 9, 100 * 1024 * 1024)):
+            refused = self.gate(50 * 1024 * 1024)
+        self.assertEqual(refused.status, 507)
+        self.assertIn("disk space", json.loads(refused.body.decode())["message"])
+
+    def test_the_gate_answers_carry_the_security_headers(self):
+        self.assertIn("Content-Security-Policy", dict(self.gate(0).headers))
+
+    def test_a_good_zip_is_kept_and_shown_with_what_each_website_has(self):
+        resp, data = self.upload()
+        self.assertEqual(resp.status, 200, data)
+        self.assertIn("Bricks Extras 1.7.6 is ready", data["message"])
+        listing = self.request("GET", "/api/uploads")[1]
+        self.assertEqual(len(listing["zips"]), 1)
+        z = listing["zips"][0]
+        self.assertEqual((z["name"], z["version"], z["kind"], z["slug"]), ("Bricks Extras", "1.7.6", "plugin", "bricksextras"))
+        states = {r["site"]: r["state"] for r in z["rows"]}
+        self.assertEqual(states["shop.example.com"], "update")
+        self.assertEqual(states["staging.example.com"], "newer")
+        self.assertEqual(states["example.org"], "unknown")
+        self.assertEqual(listing["max_mb"], 200)
+
+    def test_a_file_that_is_not_a_plugin_is_refused_with_a_reason(self):
+        import os
+        bad = os.path.join(self.root, "bad.zip")
+        with open(bad, "wb") as f:
+            f.write(b"not a zip")
+        resp, data = self.upload(bad)
+        self.assertEqual(resp.status, 400)
+        self.assertIn("not a zip file", data["message"])
+        self.assertEqual(self.request("GET", "/api/uploads")[1]["zips"], [])
+
+    def test_uploads_are_written_to_the_activity_log(self):
+        self.upload()
+        log = self.request("GET", "/api/activity")[1]["events"]
+        self.assertTrue(any(e["event"] == "UPLOAD_ADD" for e in log))
+
+    def test_the_websites_are_updated_from_the_file_and_the_cards_follow(self):
+        self.upload()
+        z = self.request("GET", "/api/uploads")[1]["zips"][0]
+        items = [{"site": "shop.example.com", "kind": "plugin", "slug": "bricksextras", "zip": z["id"]},
+                 {"site": "blog.example.com", "kind": "plugin", "slug": "bricksextras", "zip": z["id"]}]
+        resp, res = self.request("POST", "/api/wpupdate/start", {"items": items, "confirmed": True})
+        self.assertTrue(res["ok"], res)
+        import time as _t
+        _t.sleep(0.3)
+        job = self.request("GET", "/api/wpupdate")[1]
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([i["status"] for i in job["items"]], ["done", "done"])
+        self.assertIn("your upload", job["items"][0]["title"])
+        rows = {r["site"]: r for r in self.request("GET", "/api/uploads")[1]["zips"][0]["rows"]}
+        self.assertEqual((rows["shop.example.com"]["state"], rows["shop.example.com"]["installed"]), ("same", "1.7.6"))
+        self.assertEqual(rows["blog.example.com"]["state"], "same")
+
+    def test_a_website_that_is_ahead_or_unreadable_cannot_be_chosen(self):
+        self.upload()
+        z = self.request("GET", "/api/uploads")[1]["zips"][0]
+        for site in ("staging.example.com", "example.org", "nope.example.com"):
+            resp, res = self.request("POST", "/api/wpupdate/start", {"items": [{"site": site, "kind": "plugin", "slug": "bricksextras", "zip": z["id"]}], "confirmed": True})
+            self.assertEqual(resp.status, 400, site)
+        resp, res = self.request("POST", "/api/wpupdate/start", {"items": [{"site": "shop.example.com", "kind": "plugin", "slug": "bricksextras", "zip": "ffffffffffffffff"}], "confirmed": True})
+        self.assertEqual(resp.status, 400)
+
+    def test_a_newer_upload_of_the_same_plugin_replaces_the_older(self):
+        self.upload(self.make_zip("1.7.6", "a.zip"))
+        resp, data = self.upload(self.make_zip("1.8.0", "b.zip"))
+        self.assertIn("replaces the earlier upload of version 1.7.6", data["message"])
+        self.assertEqual([z["version"] for z in self.request("GET", "/api/uploads")[1]["zips"]], ["1.8.0"])
+
+    def test_a_file_can_be_deleted_from_the_server(self):
+        self.upload()
+        z = self.request("GET", "/api/uploads")[1]["zips"][0]
+        resp, res = self.request("POST", "/api/uploads/delete", {"id": z["id"]})
+        self.assertTrue(res["ok"], res)
+        self.assertIn("websites keep what was installed", res["message"])
+        self.assertEqual(self.request("GET", "/api/uploads")[1]["zips"], [])
+        self.assertEqual(self.request("POST", "/api/uploads/delete", {"id": z["id"]})[0].status, 400)
+        log = self.request("GET", "/api/activity")[1]["events"]
+        self.assertTrue(any(e["event"] == "UPLOAD_DELETE" for e in log))
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        self.assertEqual(self.request("POST", "/api/uploads/delete", {"id": "x"})[0].status, 403)
+        self.assertEqual(self.request("POST", "/api/uploads/scan", {})[0].status, 403)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/uploads")[0].status, 401)
+
+    def test_the_upload_address_does_not_take_a_small_json_body(self):
+        resp, data = self.request("POST", "/api/uploads/upload", {"file": "x"})
+        self.assertEqual(resp.status, 400)
+        self.assertIn("zip file as the body", data["message"])

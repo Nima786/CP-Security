@@ -24,7 +24,7 @@ import shlex
 import threading
 import time
 
-from . import config, updates, util
+from . import config, library, updates, util
 from .util import Result
 
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
@@ -193,12 +193,14 @@ def save_database(site, php, stamp):
     return rc == 0, "" if rc == 0 else "the database copy could not be made"
 
 
-def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
-    """Update one plugin or theme. Returns {'ok', 'restored', 'from', 'to', 'message', 'notes'}.
-    progress: called with a short plain sentence at each step, so the page can show that something is happening."""
+def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None, upload=None):
+    """Update one plugin or theme. Returns {'ok', 'restored', 'skipped', 'from', 'to', 'message', 'notes'}.
+    progress: called with a short plain sentence at each step, so the page can show that something is happening.
+    upload: a file from the library (see library.py). The plugin or theme is then replaced with the files in it, the way
+    "upload a zip and replace the current one" does in WordPress, instead of being fetched from WordPress.org."""
     say = progress or (lambda text: None)
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
-    result = {"ok": False, "restored": False, "from": "", "to": "", "message": "", "notes": [], "db_attempted": bool(db_saved)}
+    result = {"ok": False, "restored": False, "skipped": False, "from": "", "to": "", "message": "", "notes": [], "db_attempted": bool(db_saved)}
     if kind not in KINDS or not SLUG_RE.match(slug or ""):
         result["message"] = "That is not a plugin or theme name."
         return result
@@ -217,6 +219,11 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
         result["message"] = "This %s was not found on the website (it may have been removed)." % kind
         return result
     result["from"] = old
+    if upload is not None and library.version_cmp(upload["version"], old) <= 0:
+        result["skipped"] = True
+        result["message"] = ("This website already has version %s of this %s and the uploaded file is version %s, so nothing was changed."
+                             % (old, kind, upload["version"]))
+        return result
 
     say("Checking that the website answers normally")
     before = health(domain)
@@ -253,12 +260,24 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
             result["notes"].append(note)
 
     command = "%s update %s" % (kind, shlex.quote(slug))
-    say("Installing the new version")
-    rc, out = _wp(site, php, command, 600)
+    own_server = False
+    if upload is not None:
+        say("Sending the uploaded file to the website")
+        sent, problem = library.deliver(upload["id"], site)
+        if not sent:
+            result["message"] = problem
+            return result
+        try:
+            say("Installing the uploaded version")
+            rc, out = _wp(site, php, "%s install %s --force" % (kind, shlex.quote(sent)), 900)
+        finally:
+            library.discard(site, sent)                  # the website's copy of the file never stays behind
+    else:
+        say("Installing the new version")
+        rc, out = _wp(site, php, command, 600)
     errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
     new = _current(site, php, kind, slug)
-    own_server = False
-    if rc == 0 and not errors and new == old:
+    if upload is None and rc == 0 and not errors and new == old:
         # WordPress.org knows nothing about it. A plugin that updates from its maker's own server only says so once it is
         # loaded and an administrator is asking, which is what the website's own Updates page does. Try that way once.
         admin = _admin_id(site, php)
@@ -277,9 +296,13 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
         _restore_if_changed(site, path, copy, result, domain, before)
         return result
     if new == old:
-        result["message"] = ("Nothing changed: it is still version %s. This often means the update needs a licence or "
-                             "a manual download. Update it in WordPress." % old)
+        result["message"] = (("Nothing changed: it is still version %s. WordPress did not replace the files with the uploaded ones. "
+                              "Update it in WordPress." % old) if upload is not None else
+                             ("Nothing changed: it is still version %s. This often means the update needs a licence or "
+                              "a manual download. Update it in WordPress." % old))
         return result
+    if upload is not None and new != upload["version"]:
+        result["notes"].append("the website reports version %s, the file says %s" % (new, upload["version"]))
 
     say("Checking the website again")
     after = health(domain)
@@ -294,7 +317,7 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
         result["to"] = old
         return result
     result["ok"] = True
-    result["message"] = "Updated from %s to %s. The website still answers normally." % (old, new)
+    result["message"] = "Updated from %s to %s%s. The website still answers normally." % (old, new, " with the file you uploaded" if upload is not None else "")
     if own_server:
         result["message"] += " (This one updates from its maker's own server, not from WordPress.org.)"
     say("Clearing the cache")
@@ -343,14 +366,20 @@ def check_items(items):
     for it in items:
         if not isinstance(it, dict):
             return None, "Those choices could not be read."
-        site, kind, slug = it.get("site"), it.get("kind"), it.get("slug")
+        site, kind, slug, zid = it.get("site"), it.get("kind"), it.get("slug"), it.get("zip")
         if site not in known:
             return None, "%s is not a WordPress website on this server." % (str(site)[:60])
         if kind not in KINDS or not isinstance(slug, str) or not SLUG_RE.match(slug):
             return None, "That is not a plugin or theme name."
+        if zid is not None:
+            entry = library.get(zid)
+            if entry is None:
+                return None, "One of the uploaded files is no longer on the server."
+            if entry["kind"] != kind or entry["slug"] != slug:
+                return None, "That uploaded file is not the %s you chose." % kind
         if (site, kind, slug) not in seen:
             seen.add((site, kind, slug))
-            clean.append({"site": site, "kind": kind, "slug": slug})
+            clean.append(dict({"site": site, "kind": kind, "slug": slug}, **({"zip": zid} if zid is not None else {})))
     return clean, ""
 
 
@@ -398,13 +427,18 @@ def _run(on_item=None, on_done=None):
             site = it["site"]
             stamp = stamp_by_site.setdefault(site, time.strftime("%Y%m%d-%H%M%S"))
             try:
-                res = update_one(site, it["kind"], it["slug"], db_saved=db_by_site.get(site, False), stamp=stamp,
-                                 progress=lambda text, at=index: _set(at, step=text))
+                upload = library.get(it["zip"]) if it.get("zip") else None
+                if it.get("zip") and upload is None:
+                    res = {"ok": False, "restored": False, "skipped": False, "from": "", "to": "", "notes": [], "db_attempted": False,
+                           "message": "The uploaded file was deleted from the server before its turn came, so nothing was changed."}
+                else:
+                    res = update_one(site, it["kind"], it["slug"], db_saved=db_by_site.get(site, False), stamp=stamp,
+                                     progress=lambda text, at=index: _set(at, step=text), upload=upload)
             except Exception as exc:                  # one item must never stop the others, or the panel
                 res = {"ok": False, "restored": False, "from": "", "to": "", "message": "Unexpected problem: %s" % str(exc)[:120], "notes": [], "db_attempted": False}
             db_by_site[site] = db_by_site.get(site, False) or bool(res.get("db_attempted"))
             touched.add(site)
-            status = "done" if res["ok"] else ("restored" if res["restored"] else "failed")
+            status = "done" if res["ok"] else ("restored" if res["restored"] else ("skipped" if res.get("skipped") else "failed"))
             note = (" (" + "; ".join(res["notes"]) + ")") if res["notes"] else ""
             _set(index, status=status, message=res["message"] + note, step="", **{"from": res["from"], "to": res["to"]})
             if on_item:

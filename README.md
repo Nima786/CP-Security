@@ -17,7 +17,7 @@ CyberPanel server and managed from a browser without touching a terminal.
 | **Open ports** | Every port a program listens on, in plain words: who uses it today (your real websites, mailboxes, FTP accounts, domains) and what would stop if you limited it to the trusted addresses. Limit a door, open it again, or mark it as known. |
 | **Server firewall** | A firewall that really runs (CyberPanel's Firewall page can say ON when nothing is enforced). A list of ports you edit, with a 2-minute "Keep it" safety net so a wrong list cannot lock you out, and a count of what it turned away in the last hour. |
 | **Security headers** | Small instructions every website sends to browsers (LiteSpeed Enterprise). A safe set is on, the risky ones are off, per website, checked on the live site and undone if a site stops answering. |
-| **WordPress updates** | You see what is waiting on each website and update plugins and themes by hand, one at a time. A copy is saved first, the site is checked afterwards, and the old version is put back if it broke. Nothing ever updates by itself. |
+| **WordPress updates** | You see what is waiting on each website and update plugins and themes by hand, one at a time. A copy is saved first, the site is checked afterwards, and the old version is put back if it broke. For plugins that cannot update by themselves you upload the maker's zip once and update every website that has it. Nothing ever updates by itself. |
 | **Setup** | A plan you can read first, then one button. Each step undoes itself if something goes wrong, and the whole thing is safe to run again. |
 
 ### It does not fight CyberPanel

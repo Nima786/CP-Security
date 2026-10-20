@@ -111,6 +111,9 @@ Things that cost hours to discover. They explain several design choices, so they
   admin ports must also be allowed in the firewall table, and why the admin lock stays stricter.
 
 ## Updating plugins by hand (WP-CLI)
+* `wp plugin install <local zip> --force` replaces an existing plugin, keeps it switched on and keeps its settings (they are in the
+  database); it creates a second folder if the zip's folder has another name (a zip packed as `name-1.2.3/`), so rename the folder first.
+* Clean up only what you made: the website's `cps-backups` folder also holds the safety copies of the owner's own earlier updates.
 * `cp -a` keeps the folder's old modified time, so every saved copy of one plugin looks equally old. Clean up old copies by
   the time stamp in their name, never by `ls -t`. Also match the whole name: `plugin-foo-*` also matches `plugin-foo-bar-*`.
 * Run WP-CLI as the website's own user with `--skip-plugins --skip-themes`, and pick the PHP program that can start the site

@@ -3,12 +3,14 @@
 Hardening built in: a short timeout on every connection (slow-loris), a size limit on requests,
 the TLS handshake happens in the connection's own thread (a stalled handshake cannot block others).
 """
+import os
 import socket
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
-from .app import MAX_BODY, Request
+from .app import MAX_BODY, UPLOAD_PATH, Request
 
 CONNECTION_TIMEOUT = 20
 TLS_HANDSHAKE = 0x16            # the first byte of every TLS connection; plain HTTP starts with a letter
@@ -133,7 +135,48 @@ class PanelHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):          # the panel keeps its own, more useful log
         pass
 
+    def _serve_upload(self):
+        """A zip file sent as the raw body. Who is asking and how big the file is get checked BEFORE a byte is read, and the
+        file is written straight to disk in pieces (it is never held in memory)."""
+        app = self.server.app
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        req = Request(self.command, self.path, dict(self.headers.items()), b"", self.client_address[0])
+        refused = app.upload_gate(req, length)
+        if refused is not None:
+            self.close_connection = True
+            self._send(refused.status, refused.body, refused.ctype, refused.headers)
+            return
+        dest = app.upload_target()
+        received = 0
+        try:
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as out:
+                while received < length:
+                    chunk = self.rfile.read(min(262144, length - received))
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    received += len(chunk)
+            if received != length:
+                self._send(400, b'{"ok": false, "code": "cut_short", "message": "The upload was cut short. Try again."}', "application/json", [])
+                return
+            resp = app.handle_upload(req, dest)
+            self._send(resp.status, resp.body, resp.ctype, resp.headers)
+        except OSError:                                   # the connection stalled or broke, or the disk is full
+            self.close_connection = True
+        finally:
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+
     def _serve(self):
+        if self.command == "POST" and urlsplit(self.path).path == UPLOAD_PATH:
+            self._serve_upload()
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
