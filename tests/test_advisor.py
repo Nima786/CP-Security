@@ -170,8 +170,25 @@ class TheServer(Quiet):
         self.fake.table[-1] = (["firewall-cmd", "--list-ports"], (0, "8090/tcp 8443/tcp\n"))
         self.assertNotIn("panel_port_closed", ids(advisor.check_general_firewall()))
 
-    def test_no_firewall_at_all_is_a_note(self):
-        self.assertEqual(advisor.check_general_firewall()[0]["level"], "info")
+    def test_no_firewall_at_all_is_a_warning_that_points_to_the_server_firewall_page(self):
+        f = advisor.check_general_firewall()[0]
+        self.assertEqual((f["id"], f["level"]), ("firewall_general", "warn"))
+        self.assertEqual(f["fix"], {"kind": "page", "id": "serverfw", "label": "Open Server firewall"})
+
+    def test_cyberpanels_on_light_without_a_firewall_behind_it_is_called_out(self):
+        os.makedirs(config.P.at("/usr/local/CyberCP"))
+        self.fake.table.append((["systemctl", "status", "firewalld"], (4, "Unit firewalld.service could not be found.\n")))
+        self.fake.table.append((["systemctl", "is-active", "firewalld"], (4, "inactive\n")))
+        f = advisor.check_general_firewall()[0]
+        self.assertEqual(f["level"], "warn")
+        self.assertIn("says ON", f["title"])
+        self.assertIn("Do not use the Start, Stop or Reload", f["advice"])
+
+    def test_our_own_firewall_being_on_is_good_news(self):
+        self.fake.table.append((["nft", "list", "table", "inet", "cps_fw"], (0, "table inet cps_fw { counter drop }")))
+        f = advisor.check_general_firewall()[0]
+        self.assertEqual(f["level"], "ok")
+        self.assertIn("CP-Security firewall", f["title"])
 
 
 class Cloudflare(Quiet):

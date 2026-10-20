@@ -16,7 +16,7 @@ import ssl
 import sys
 import time
 
-from . import __version__, access, blocker, config, netinfo, provision, settings, tls, util, webserver
+from . import __version__, access, blocker, config, netinfo, provision, serverfw, settings, tls, util, webserver
 from .panel import auth
 
 DEFAULT_PORT = 9443
@@ -429,6 +429,14 @@ def uninstall(c, purge=False):
         if os.path.exists(path):
             os.remove(path)
         c.say("  The admin lock was removed.")
+
+    fw_unit = p.systemd_dir + "/" + provision.SERVICE_FW
+    if (os.path.exists(fw_unit) or serverfw.is_loaded()) and c.yes(
+            "Also turn off and remove the server firewall? Every port that has a program behind it would be open to the internet.", default=False):
+        serverfw.turn_off()
+        if os.path.exists(fw_unit):
+            os.remove(fw_unit)
+        c.say("  The server firewall was turned off and removed.")
     util.run(["systemctl", "daemon-reload"])
 
     if purge:

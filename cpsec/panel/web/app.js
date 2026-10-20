@@ -37,6 +37,7 @@
     advisor: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z',
     ports: 'M7.77 6.76L6.23 5.48.82 12l5.41 6.52 1.54-1.28L3.42 12l4.35-5.24zM7 13h2v-2H7v2zm10-2h-2v2h2v-2zm-6 2h2v-2h-2v2zm6.77-7.52l-1.54 1.28L20.58 12l-4.35 5.24 1.54 1.28L23.18 12l-5.41-6.52z',
     headers: 'M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 14v2h8v-2h-8zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z',
+    serverfw: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 10h5v4H4v-4zm0 6v-2h5v2H4zm0-10h5v2H4V6zm7 0h9v2h-9V6zm0 4h4v4h-4v-4zm6 0h3v4h-3v-4zm-6 6h9v2h-9v-2z',
     setup: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
     more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
   };
@@ -162,6 +163,7 @@
     ['blocked', 'Blocked', 'blocked', 'Blocked', 'Protection', true],
     ['access', 'Admin access', 'access', 'Access', 'Protection', false],
     ['ports', 'Open ports', 'ports', 'Ports', 'Protection', false],
+    ['serverfw', 'Server firewall', 'serverfw', 'Server FW', 'Protection', false],
     ['headers', 'Security headers', 'headers', 'Headers', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
@@ -540,6 +542,129 @@
 
     return h('div', { class: 'stack' }, head, summary,
       h('section', { class: 'card flush' }, table(small ? ['Door', 'Who can reach it'] : ['Door', 'Who can reach it', ''], rows, 'No open ports were found.')));
+  }
+
+  // ------------------------------------------------------------------ server firewall
+  const FW_SOURCE = { you: 'added by you', cyberpanel: 'copied from CyberPanel', 'in use': 'was in use', 'other firewall': 'allowed by another firewall rule' };
+  const clockText = s => Math.floor(s / 60) + ':' + String(Math.max(0, s % 60)).padStart(2, '0');
+
+  async function viewServerFw() {
+    const { data } = await api('/api/serverfw');
+    const t = data.truth, cp = t.cyberpanel;
+    const small = isSmall();
+    const head = pageHead('Server firewall', 'Which ports are open to the internet. While the firewall is on, only the ports on your list are open and everything else is refused.');
+    clearInterval(S.fwTick);
+
+    const run = async (path, body, busy) => { const r = await act(path, body, busy); redraw(); return r; };
+    const turnOn = async () => {
+      const addBox = h('input', { type: 'checkbox', id: 'fw-add', checked: true });
+      const sug = data.suggestions;
+      const content = h('div', {},
+        h('p', { text: 'Only the ports on your list will stay open. The server login and the admin pages are always open, so you cannot lock yourself out.' }),
+        sug.length ? h('div', {},
+          h('p', { text: 'These are in use right now and are not on your list. Visitors and programs would be refused:' }),
+          h('ul', { class: 'plain' }, sug.map(s => h('li', {}, h('span', { class: 'mono', text: s.port + ' ' + s.proto.toUpperCase() }), ' ' + s.name + (s.address ? ' (only from ' + s.address + ')' : '')))),
+          tick('fw-add', addBox, 'Also allow these (recommended)')) : null,
+        h('p', { class: 'muted small', style: 'margin-top:.75rem', text: 'Safety net: after you turn it on you have ' + (data.confirm_seconds / 60) + ' minutes to press "Keep it". If you do nothing, the firewall switches itself off again.' }));
+      if (!await dialog({ title: 'Turn the firewall on?', content, ok: 'Turn on' })) return;
+      await run('/api/serverfw/power', { action: 'on', add_in_use: addBox.checked, confirmed: true }, 'Turning the firewall on…');
+    };
+    const turnOff = async () => {
+      if (!await confirmBox('Turn the firewall off?', 'Every port that has a program behind it can be reached from the internet again. The admin lock keeps working.', 'Turn off', true)) return;
+      await run('/api/serverfw/power', { action: 'off' }, 'Turning the firewall off…');
+    };
+    const remove = async r => {
+      if (!await confirmBox('Close ' + r.text + '?', data.enabled ? 'It is removed from the list and closed right away.' : 'It is removed from the list.', 'Remove', true)) return;
+      let res = (await api('/api/serverfw/remove', { method: 'POST', body: { id: r.id } })).data;
+      if (res.code === 'needs_confirm') {
+        if (!await confirmBox('Close a port that is in use?', res.message, 'Close it anyway', true)) return;
+        res = (await api('/api/serverfw/remove', { method: 'POST', body: { id: r.id, confirmed: true } })).data;
+      }
+      toast(res.message, res.ok ? 'ok' : 'bad');
+      redraw();
+    };
+
+    // ---- the truth
+    const buttons = h('div', { class: 'row', style: 'margin-top:1rem' },
+      data.loaded
+        ? [h('button', { class: 'btn', type: 'button', text: 'Reload', onclick: () => run('/api/serverfw/power', { action: 'reload' }, 'Reloading…') }),
+           h('button', { class: 'btn danger', type: 'button', text: 'Turn off…', onclick: turnOff })]
+        : h('button', { class: 'btn primary', type: 'button', text: 'Turn on…', onclick: turnOn }));
+    const status = h('section', { class: 'card' },
+      h('div', { class: 'row' }, h('h2', { text: data.loaded ? 'The firewall is ON' : 'The firewall is OFF' }), badge(data.loaded ? 'ON' : 'OFF', data.loaded ? 'ok' : 'bad')),
+      h('p', { text: t.verdict.text }),
+      cp.present ? h('div', { class: 'mini ' + (cp.level === 'bad' ? 'bad' : cp.level === 'ok' ? 'ok' : '') },
+        icon(cp.level === 'bad' ? 'alert' : 'info'),
+        h('div', {}, h('div', { class: 'what', text: 'What CyberPanel\u2019s own Firewall page says' }), h('div', { class: 'text', text: cp.text }))) : null,
+      buttons);
+
+    // ---- waiting for "Keep it"
+    let waiting = null;
+    if (data.pending) {
+      const clock = h('strong', { text: clockText(data.pending.seconds_left) });
+      let left = data.pending.seconds_left;
+      const id = S.drawId;
+      S.fwTick = setInterval(() => {
+        if (id !== S.drawId || S.view !== 'serverfw') { clearInterval(S.fwTick); return; }
+        left -= 1; clock.textContent = clockText(Math.max(0, left));
+        if (left <= -2) { clearInterval(S.fwTick); softRedraw(); }
+      }, 1000);
+      waiting = h('section', { class: 'card', style: 'border-color:var(--warn)' },
+        h('h2', { text: 'Is everything still working?' }),
+        h('p', {}, 'The firewall is on but not confirmed yet. Check your websites, mail and anything else you use. In ', clock,
+          ' it switches itself off again, unless you press Keep it.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', type: 'button', text: 'Keep it', onclick: () => run('/api/serverfw/keep', {}, 'Saving…') }),
+          h('button', { class: 'btn', type: 'button', text: 'Undo now', onclick: () => run('/api/serverfw/undo', {}, 'Undoing…') })));
+    }
+
+    // ---- what could be added
+    const sug = data.suggestions;
+    const sugCard = sug.length ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'In use but not on your list' }), badge(String(sug.length), 'warn'),
+        h('button', { class: 'btn small primary right', type: 'button', text: 'Add them all', onclick: () => run('/api/serverfw/suggested', {}, 'Adding…') })),
+      table(['Port', 'Name', 'Why'], sug.map(s => h('tr', {},
+        h('td', {}, h('span', { class: 'mono', text: s.port }), ' ', badge(s.proto.toUpperCase(), '')),
+        h('td', {}, s.name, s.address ? h('div', { class: 'muted small', text: 'only from ' + s.address }) : null),
+        h('td', { class: 'muted small', text: s.why }))), ''),
+      h('div', { class: 'card-foot muted small', text: 'When the firewall is on, anything that is not on the list is refused. Add what you use.' })) : null;
+    const copyCard = data.cyberpanel_rules ? h('section', { class: 'card' },
+      h('h2', { text: 'Start from CyberPanel\u2019s list' }),
+      h('p', { class: 'muted', text: 'CyberPanel keeps a list of ' + data.cyberpanel_rules + ' rules. You can copy it here once, so you do not have to type it again. The server login and the admin pages are skipped: they are always open.' }),
+      h('button', { class: 'btn', type: 'button', text: 'Copy CyberPanel\u2019s list', onclick: () => run('/api/serverfw/import', {}, 'Copying…') })) : null;
+
+    // ---- the list
+    const form = h('form', { class: 'inline-form' },
+      field('fw-name', 'Name', { type: 'text', placeholder: 'for example My tunnel', maxlength: 40 }),
+      h('div', { class: 'field' }, h('label', { for: 'fw-proto', text: 'Protocol' }), h('select', { id: 'fw-proto' }, h('option', { value: 'tcp', text: 'TCP' }), h('option', { value: 'udp', text: 'UDP' }))),
+      field('fw-address', 'From (empty = everybody)', { type: 'text', placeholder: 'for example 203.0.113.25' }),
+      field('fw-port', 'Port or range', { type: 'text', required: true, placeholder: '4445 or 40110-40210', inputmode: 'numeric' }),
+      h('button', { class: 'btn primary', type: 'submit', text: 'Open this port' }));
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const r = await act('/api/serverfw/add', { name: $('#fw-name').value, proto: $('#fw-proto').value, address: $('#fw-address').value, port: $('#fw-port').value }, 'Adding…');
+      if (r.ok) redraw();
+    });
+    const ruleRows = data.rules.map(r => {
+      const btn = h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: () => remove(r) });
+      return h('tr', {},
+        h('td', {}, h('strong', { text: r.name }), h('div', { class: 'muted small', text: FW_SOURCE[r.source] || '' }),
+          r.in_use ? badge('in use' + (r.used_by.length ? ': ' + r.used_by.join(', ') : ''), 'ok') : null, small ? h('div', { style: 'margin-top:.4rem' }, btn) : null),
+        h('td', {}, badge(r.proto.toUpperCase(), ''), ' ', r.address ? r.address : 'everybody'),
+        h('td', { class: 'mono', text: r.port }),
+        small ? null : h('td', { class: 'actions' }, btn));
+    });
+    const always = data.builtin.map(b => h('tr', { class: 'muted' },
+      h('td', {}, h('strong', { text: b.name }), h('div', { class: 'small', text: b.what }), badge('always open', '')),
+      h('td', { text: 'everybody' }), h('td', { class: 'mono', text: b.port || '' }), small ? null : h('td', {})));
+    const list = h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'Your list' }), badge(data.rules.length + ' rule' + (data.rules.length === 1 ? '' : 's'), ''),
+        h('span', { class: 'muted small right', text: data.loaded ? 'Changes apply at once.' : 'The firewall is off: changes apply when you turn it on.' })),
+      table(small ? ['Name', 'Open to', 'Port'] : ['Name', 'Open to', 'Port', ''], ruleRows.concat(always), ''),
+      h('div', { class: 'card-foot' }, form));
+
+    return h('div', { class: 'stack' }, head, status, waiting, sugCard, copyCard, list,
+      h('p', { class: 'muted small', text: 'Only incoming traffic is judged: what the server starts itself is never blocked. Ports published by Docker are not covered. TCP and UDP are separate, like on CyberPanel\u2019s page.' }));
   }
 
   // ------------------------------------------------------------------ security headers
@@ -1087,7 +1212,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];

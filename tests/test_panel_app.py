@@ -450,6 +450,61 @@ class AdvisorAndSetup(PanelCase):
         self.assertEqual((rows[6379]["level"], rows[6379]["ignored"]), ("info", True))
         self.assertTrue(self.request("POST", "/api/ports/accept", {"port": 6379, "accepted": False})[1]["ok"])
 
+    def test_the_server_firewall_page_and_every_button_work(self):
+        _, data = self.request("GET", "/api/serverfw")
+        self.assertFalse(data["loaded"])
+        self.assertEqual(data["truth"]["cyberpanel"]["level"], "bad")
+        self.assertEqual(data["truth"]["verdict"]["level"], "bad")
+        self.assertTrue(data["suggestions"])
+        self.assertEqual(data["pending"], None)
+
+        resp, res = self.request("POST", "/api/serverfw/add", {"name": "Tunnel", "proto": "tcp", "address": "", "port": "4445"})
+        self.assertTrue(res["ok"], res)
+        resp, res = self.request("POST", "/api/serverfw/add", {"name": "Tunnel", "proto": "tcp", "address": "", "port": "4445"})
+        self.assertEqual((resp.status, res["code"]), (400, "exists"))
+        resp, res = self.request("POST", "/api/serverfw/add", {"name": "Bad", "proto": "icmp", "port": "1"})
+        self.assertEqual((resp.status, res["code"]), (400, "invalid"))
+        self.assertTrue(self.request("POST", "/api/serverfw/import", {})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/serverfw/suggested", {})[1]["ok"])
+
+        resp, res = self.request("POST", "/api/serverfw/power", {"action": "on"})
+        self.assertEqual((resp.status, res["code"]), (409, "needs_confirm"))
+        resp, res = self.request("POST", "/api/serverfw/power", {"action": "on", "confirmed": True})
+        self.assertEqual((resp.status, res["code"]), (200, "pending"))
+        data = self.request("GET", "/api/serverfw")[1]
+        self.assertTrue(data["loaded"])
+        self.assertGreater(data["pending"]["seconds_left"], 100)
+        self.assertEqual(self.request("POST", "/api/serverfw/power", {"action": "on", "confirmed": True})[1]["code"], "pending")
+        self.assertTrue(self.request("POST", "/api/serverfw/keep", {})[1]["ok"])
+        self.assertEqual(self.request("POST", "/api/serverfw/keep", {})[1]["code"], "none")
+
+        rid = self.request("GET", "/api/serverfw")[1]["rules"][0]["id"]
+        resp, res = self.request("POST", "/api/serverfw/remove", {"id": rid})
+        if res["code"] == "needs_confirm":
+            self.assertTrue(self.request("POST", "/api/serverfw/remove", {"id": rid, "confirmed": True})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/serverfw/power", {"action": "reload"})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/serverfw/power", {"action": "off"})[1]["ok"])
+        self.assertFalse(self.request("GET", "/api/serverfw")[1]["loaded"])
+        self.assertEqual(self.request("POST", "/api/serverfw/power", {"action": "explode"})[1]["code"], "invalid")
+
+    def test_turning_the_demo_firewall_on_can_be_undone(self):
+        self.request("POST", "/api/serverfw/power", {"action": "on", "confirmed": True})
+        before = len(self.request("GET", "/api/serverfw")[1]["rules"])
+        self.assertGreater(before, 0)
+        self.assertTrue(self.request("POST", "/api/serverfw/undo", {})[1]["ok"])
+        data = self.request("GET", "/api/serverfw")[1]
+        self.assertEqual((data["loaded"], len(data["rules"]), data["pending"]), (False, 0, None))
+
+    def test_the_server_firewall_routes_refuse_nonsense_and_are_logged(self):
+        for path, body in (("/api/serverfw/suggested", {"keys": "tcp::80"}), ("/api/serverfw/suggested", {"keys": [5]})):
+            resp, res = self.request("POST", path, body)
+            self.assertEqual(resp.status, 400, (path, body))
+        resp, res = self.request("POST", "/api/serverfw/remove", {"id": "x"})
+        self.assertEqual((resp.status, res["code"]), (400, "missing"))
+        self.request("POST", "/api/serverfw/power", {"action": "off"})
+        _, log = self.request("GET", "/api/activity")
+        self.assertTrue(any(e["event"] == "FW_POWER" for e in log["events"]))
+
     def test_the_security_headers_page_and_every_choice_work(self):
         _, data = self.request("GET", "/api/headers")
         self.assertTrue(data["supported"])
@@ -517,7 +572,9 @@ class AdvisorAndSetup(PanelCase):
         for path in ("/api/advisor/fix", "/api/setup/run", "/api/settings/blocker", "/api/access/never/add",
                      "/api/firewall/selftest", "/api/settings/baseline", "/api/ports/lock", "/api/ports/unlock",
                      "/api/ports/accept", "/api/headers/defaults", "/api/headers/check", "/api/headers/apply",
-                     "/api/headers/remove", "/api/headers/site"):
+                     "/api/headers/remove", "/api/headers/site", "/api/serverfw/add", "/api/serverfw/remove",
+                     "/api/serverfw/power", "/api/serverfw/keep", "/api/serverfw/undo", "/api/serverfw/import",
+                     "/api/serverfw/suggested"):
             self.assertEqual(self.request("POST", path, {})[0].status, 403, path)
 
 
@@ -535,7 +592,7 @@ class LiveDataRoutes(PanelCase):
         self.login()
 
     def test_every_page_answers_without_an_internal_error(self):
-        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/firewall",
+        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/firewall",
                  "/api/updates",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]

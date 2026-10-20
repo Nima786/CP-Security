@@ -12,6 +12,7 @@ Quick commands:     security status            health check
                     security unblock 1.2.3.4   let one address back in
                     security myip 1.2.3.4      my home internet address changed
                     security firewall watch    web firewall: off | watch | block
+                    security serverfw          the server firewall: status | on | off | reload | keep | undo
                     security updates           which sites have updates waiting (only looks)
                     security advice            what to improve, and other security tools found
                     security setup             show the plan and set up what is missing (--yes: no questions)
@@ -50,6 +51,32 @@ def _update(options):
     return 0 if res.ok and updater.state()["job"]["status"] != "failed" else 1
 
 
+def _serverfw(options):
+    """security serverfw [status|on|off|reload|keep|undo|revert]  -  the server firewall (the panel has the same buttons)."""
+    from . import serverfw
+    action = options[0] if options else "status"
+    if action == "status":
+        st = serverfw.state()
+        t = st["truth"]
+        print("Server firewall: " + ("ON" if st["loaded"] else "off") + "  (" + t["verdict"]["text"] + ")")
+        print("CyberPanel's page: " + t["cyberpanel"]["text"])
+        print("%d rule%s on your list; %d in-use port%s not on it yet." % (
+            len(st["rules"]), "" if len(st["rules"]) == 1 else "s", len(st["suggestions"]), "" if len(st["suggestions"]) == 1 else "s"))
+        if st["pending"]:
+            print("Waiting for 'keep' (%d seconds left), then it undoes itself." % st["pending"]["seconds_left"])
+        return 0
+    if action == "on":
+        return _print(serverfw.power("on", add_in_use=True, confirmed=True))
+    if action in ("off", "reload"):
+        return _print(serverfw.power(action))
+    if action == "keep":
+        return _print(serverfw.confirm())
+    if action in ("undo", "revert"):
+        return _print(serverfw.revert())
+    print("Use:  security serverfw status | on | off | reload | keep | undo")
+    return 1
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if hasattr(os, "geteuid") and os.geteuid() != 0 and not os.environ.get("CPSEC_ROOT"):
@@ -76,6 +103,8 @@ def main(argv=None):
     elif cmd == "firewall":
         print("Web firewall: " + waf.MODE_TEXT.get(waf.mode() or "", "not set up"))
         print("Change it with:  security firewall off|watch|block")
+    elif cmd == "serverfw":
+        return _serverfw(args[1:])
     elif cmd == "updates":
         menu.menu_updates()
     elif cmd == "apply":

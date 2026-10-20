@@ -110,3 +110,9 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   let the owner switch it on or off for all websites or for one, and undo it. Risky choices start off.
 * **Security headers go into the website's `.htaccess` on LiteSpeed Enterprise** (Apache-style, as CyberPanel's
   own vhost files are). OpenLiteSpeed ignores header lines there, so the page says so and writes nothing.
+* **The server firewall is our own nftables table, not firewalld.** CyberPanel's Firewall page drives firewalld, which is
+  often not installed, while the page still shows ON (it turns OFF only when the status text contains "dead"). Installing
+  and enabling firewalld on a live server would close every port not in its list. `serverfw.py` keeps its own list and
+  loads one table (`cps_fw`, hook priority 10, after the admin lock at -1 and the blocker at -1, so the stricter always
+  wins). Turning it on is always followed by a 2-minute systemd timer that undoes it unless the owner presses "Keep it";
+  it becomes permanent (service enabled) only then.

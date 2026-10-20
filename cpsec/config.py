@@ -23,6 +23,8 @@ class Paths:
         self.panel_settings = self.conf_dir + "/panel.json"
         self.ports_settings = self.conf_dir + "/ports.json"
         self.headers_settings = self.conf_dir + "/headers.json"
+        self.fw_settings = self.conf_dir + "/firewall.json"
+        self.fw_nft = self.conf_dir + "/firewall.nft"
         self.tls_dir = self.conf_dir + "/tls"
         self.nft_file = self.conf_dir + "/admin-lock.nft"
         self.updates_cache = self.conf_dir + "/updates-cache.json"

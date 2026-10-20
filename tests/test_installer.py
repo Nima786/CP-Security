@@ -317,6 +317,20 @@ class Uninstalling(EnvTestCase):
         self.assertFalse(os.path.exists(config.P.systemd_dir + "/" + provision.SERVICE_LOCK))
         self.assertTrue(self.fake.called("nft", "delete", "table", "inet", access.TABLE))
 
+    def test_the_server_firewall_is_asked_about_only_when_there_is_one_and_removed_only_on_its_own_yes(self):
+        fw_unit = config.P.systemd_dir + "/" + provision.SERVICE_FW
+        c = self.run_it({"Continue?": True, "Also remove the attack": False, "Also remove the admin lock": False})
+        self.assertNotIn("server firewall", c.text, "no question when there is no firewall")
+        self.write(fw_unit, "[Unit]\n")
+        self.run_it({"Continue?": True, "Also remove the attack": False, "Also remove the admin lock": False,
+                     "Also turn off and remove the server firewall": False})
+        self.assertTrue(os.path.exists(fw_unit))
+        self.assertFalse(self.fake.called("nft", "delete", "table", "inet", "cps_fw"))
+        self.run_it({"Continue?": True, "Also remove the attack": False, "Also remove the admin lock": False,
+                     "Also turn off and remove the server firewall": True})
+        self.assertFalse(os.path.exists(fw_unit))
+        self.assertTrue(self.fake.called("nft", "delete", "table", "inet", "cps_fw"))
+
     def test_purge_deletes_settings_and_program(self):
         self.run_it({"Continue?": True, "Also remove the attack": False, "Also remove the admin lock": False}, purge=True)
         self.assertFalse(os.path.exists(config.P.conf_dir))

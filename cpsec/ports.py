@@ -18,7 +18,7 @@ import ipaddress
 import os
 import re
 
-from . import access, config, settings, util
+from . import access, config, provision, settings, util
 from .util import Result
 
 PROTECTED = (80, 443)               # the websites themselves: never lockable
@@ -155,6 +155,9 @@ def listening():
 
 def general_firewall():
     """Name of a general firewall that is switched on (it may close more than CP-Security's lock), or ''."""
+    rc, out = util.run(["nft", "list", "table", "inet", provision.FW_TABLE])
+    if rc == 0 and ("table inet %s" % provision.FW_TABLE) in out and "drop" in out:
+        return "CP-Security firewall"
     rc, out = util.run(["systemctl", "is-active", "firewalld"])
     if rc == 0 and out.strip() == "active":
         return "firewalld"

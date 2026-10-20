@@ -62,7 +62,7 @@ An optional authenticator-app code can be switched on in Settings. Without a que
 * **Terminal menu** – type `security` on the server. Numbered, plain-English, everything undoable.
   `security advice`, `security setup`, `security selftest` do one thing each.
 * **Browser panel** – the same things with buttons: Overview · Advisor · Blocked · Admin access ·
-  Open ports · Security headers · Web firewall · WP Updates · Setup · Settings. Every protection is explained in
+  Open ports · Server firewall · Security headers · Web firewall · WP Updates · Setup · Settings. Every protection is explained in
   plain words and every one can be switched on or off by the owner, for all websites or for a single one.
 
 Try the panel on any computer with made-up data (nothing on the machine is touched):

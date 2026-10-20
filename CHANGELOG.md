@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0
+* **Server firewall** (new page). On servers where CyberPanel's firewall program (firewalld) is not installed, CyberPanel's
+  Firewall page still shows "ON" and keeps a list of rules, but nothing is enforced: its ON light only turns OFF when the
+  program reports "dead", and a missing program gives a different answer. The new page tells the truth side by side with
+  CyberPanel's claim, and gives a firewall that really works, with the same kind of list (name, TCP or UDP, address, port
+  or range): add and remove rules, copy CyberPanel's list once, turn on, turn off, reload.
+* While it is on, only the listed ports are open. Always allowed: replies to connections the server started, the server
+  itself, ping, automatic network settings (DHCP), the server login and the admin pages (the admin lock still decides
+  who may use those).
+* **A safety net:** turning it on starts a 2-minute timer (a systemd timer, so it survives a panel restart). Unless you
+  press "Keep it" the firewall switches itself off again, so a wrong list cannot lock you out for long. It only becomes
+  permanent (and comes back after a restart) when you press Keep it. Opening a port, closing one, turning off and
+  reloading need no such net.
+* "In use but not on your list" shows what would stop working (ports with a program behind them, UDP too, and
+  ports that other tools already allow in the firewall); one button adds them, and turning on offers the same.
+  Closing a port that is in use asks again.
+* The Advisor now says "CyberPanel's Firewall page says ON, but no firewall is running" when that is the case, and no
+  longer sends people to that page. From the command line: `security serverfw status|on|off|reload|keep|undo`.
+
 ## 0.4.1
 * **The "Advice for you" card on the Overview no longer blinks.** It used to appear only after the advice had been
   gathered (a few seconds), pushing the rest of the page down, and it disappeared and came back each time the page

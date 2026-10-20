@@ -259,3 +259,5 @@ summary { cursor: pointer; font-weight: 600; color: var(--brand); }
 .dialog[open] { display: flex; flex-direction: column; max-height: calc(100vh - 2rem); }
 .dialog[open] .body { overflow-y: auto; flex: 1 1 auto; }
 .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+ul.plain { margin: .3rem 0 .7rem 1.1rem; padding: 0; }
+ul.plain li { margin: .15rem 0; }

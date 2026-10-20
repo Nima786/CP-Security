@@ -98,3 +98,14 @@ Things that cost hours to discover. They explain several design choices, so they
 * `ss -ltnp` shows the program name with the port. CyberPanel's web terminal listens on 8888 (`uvicorn`), 
   the panel itself on 8090 (`lscpd`); the LiteSpeed admin on 7080. A connection from `127.0.0.2` is a handy stand-in
   for an outsider when proving the lock, because only `127.0.0.1` is trusted on the loopback.
+## CyberPanel's Firewall page
+* The ON light is `systemctl status firewalld` not containing the word "dead". A missing firewalld gives "Unit
+  firewalld.service could not be found", so the page says ON with nothing behind it. Rules on that page are rows in the
+  `cyberpanel.firewall_firewallrules` table (root can read them with `mysql -N -e`, no password needed).
+* Ubuntu's `ufw.service` can be "enabled" and active while `ufw status` says "inactive": ask `ufw status`, not systemctl.
+* Test a firewall without touching live traffic: (1) `nft -c -f file` only checks the syntax; (2) a table that only
+  judges one stand-in address such as 127.0.0.2; (3) best: two network namespaces joined by a veth pair, load the real file
+  in one and try the ports from the other (`ip netns exec`). Replies, loopback, ping, address-limited rules and the empty
+  list can all be proven that way.
+* Several base chains on the same hook all judge a packet: an accept in one does not skip the others. That is why the
+  admin ports must also be allowed in the firewall table, and why the admin lock stays stricter.

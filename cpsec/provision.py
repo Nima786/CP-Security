@@ -81,7 +81,9 @@ LOGROTATE_AUDIT = """# Written by CP-Security. The firewall's log holds request 
 
 SERVICE_FEED = "cps-wplogin-feed.service"
 SERVICE_LOCK = "cps-admin-lock.service"
+SERVICE_FW = "cps-firewall.service"
 SERVICE_PANEL = "cp-security-panel.service"
+FW_TABLE = "cps_fw"
 
 UNIT_FEED = """[Unit]
 Description=CP-Security: copies failed WordPress logins for the attack blocker
@@ -105,6 +107,21 @@ UNIT_LOCK = """[Unit]
 Description=CP-Security: only trusted addresses may open the admin pages
 After=network-online.target nftables.service
 Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={nft} -f {nft_file}
+ExecReload={nft} -f {nft_file}
+ExecStop=-{nft} delete table inet {table}
+
+[Install]
+WantedBy=multi-user.target
+"""
+UNIT_FW = """[Unit]
+Description=CP-Security: the server firewall (only the ports on the owner's list are open)
+After=network-pre.target nftables.service
+Before=network.target
 
 [Service]
 Type=oneshot
@@ -769,6 +786,7 @@ def refresh_after_update():
         (SERVICE_FEED, UNIT_FEED.format(install_dir=p.install_dir, python=python_path())),
         (SERVICE_PANEL, UNIT_PANEL.format(install_dir=p.install_dir, python=python_path())),
         (SERVICE_LOCK, UNIT_LOCK.format(nft=nft_path(), nft_file=p.nft_file, table=access.TABLE)),
+        (SERVICE_FW, UNIT_FW.format(nft=nft_path(), nft_file=p.fw_nft, table=FW_TABLE)),
     )
     changed = False
     for name, text in wanted:

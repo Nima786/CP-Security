@@ -141,6 +141,14 @@ class App:
             ("POST", "/api/access/home"): (self.api_access_home, True),
             ("POST", "/api/access/never/add"): (self.api_never_add, True),
             ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/serverfw"): (self.api_serverfw, True),
+            ("POST", "/api/serverfw/add"): (self.api_serverfw_add, True),
+            ("POST", "/api/serverfw/remove"): (self.api_serverfw_remove, True),
+            ("POST", "/api/serverfw/power"): (self.api_serverfw_power, True),
+            ("POST", "/api/serverfw/keep"): (self.api_serverfw_keep, True),
+            ("POST", "/api/serverfw/undo"): (self.api_serverfw_undo, True),
+            ("POST", "/api/serverfw/import"): (self.api_serverfw_import, True),
+            ("POST", "/api/serverfw/suggested"): (self.api_serverfw_suggested, True),
             ("GET", "/api/headers"): (self.api_headers, True),
             ("POST", "/api/headers/defaults"): (self.api_headers_defaults, True),
             ("POST", "/api/headers/check"): (self.api_headers_check, True),
@@ -399,6 +407,54 @@ class App:
         port = _port_number(b.get("port"))
         res = self.engine.ports_accept(port, bool(b.get("accepted", True)))
         activity.write("PORT_ACCEPT" if b.get("accepted", True) else "PORT_UNACCEPT", ip=req.ip, target=str(port), ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ server firewall
+    def api_serverfw(self, req, session):
+        return _json(200, self.engine.serverfw_state())
+
+    def api_serverfw_add(self, req, session):
+        b = req.json()
+        res = self.engine.serverfw_add(_text(b.get("name"), 60), _text(b.get("proto"), 8), _text(b.get("address"), 64),
+                                       _text(b.get("port"), 20))
+        activity.write("FW_ADD", ip=req.ip, target="%s/%s" % (_text(b.get("port"), 20), _text(b.get("proto"), 8)), ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_remove(self, req, session):
+        b = req.json()
+        rule_id = b.get("id") if isinstance(b.get("id"), int) and not isinstance(b.get("id"), bool) else 0
+        res = self.engine.serverfw_remove(rule_id, bool(b.get("confirmed")))
+        activity.write("FW_REMOVE", ip=req.ip, target=str(rule_id), ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_power(self, req, session):
+        b = req.json()
+        action = _text(b.get("action"), 10)
+        res = self.engine.serverfw_power(action, bool(b.get("add_in_use", True)), bool(b.get("confirmed")))
+        activity.write("FW_POWER", ip=req.ip, action=action, ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_keep(self, req, session):
+        res = self.engine.serverfw_keep()
+        activity.write("FW_KEEP", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_undo(self, req, session):
+        res = self.engine.serverfw_undo()
+        activity.write("FW_UNDO", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_import(self, req, session):
+        res = self.engine.serverfw_import()
+        activity.write("FW_IMPORT", ip=req.ip, ok=res.ok)
+        return _result(res)
+
+    def api_serverfw_suggested(self, req, session):
+        keys = req.json().get("keys")
+        if keys is not None and (not isinstance(keys, list) or not all(isinstance(k, str) for k in keys) or len(keys) > 300):
+            raise BadRequest("Those choices could not be read.")
+        res = self.engine.serverfw_add_suggested(None if keys is None else [k[:120] for k in keys])
+        activity.write("FW_SUGGESTED", ip=req.ip, ok=res.ok)
         return _result(res)
 
     # ------------------------------------------------------------------ security headers

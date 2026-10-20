@@ -20,8 +20,8 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from . import (access, blocker, config, headers, netinfo, ports, provision, settings, sites, tls, util, waf,
-                webserver)
+from . import (access, blocker, config, headers, netinfo, ports, provision, serverfw, settings, sites, tls, util,
+                waf, webserver)
 from .util import Result
 
 LEVEL_ORDER = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
@@ -273,25 +273,30 @@ def check_open_services():
 def check_general_firewall():
     s = settings.load()
     port = s["port"] if isinstance(s["port"], int) and s["port"] else None
-    firewalld, ufw = _active("firewalld"), False
-    if not firewalld:
-        rc, out = util.run(["ufw", "status"])
-        ufw = rc == 0 and "Status: active" in out
+    t = serverfw.truth()
     out_list = []
-    if firewalld or ufw:
-        name = "firewalld" if firewalld else "ufw"
-        out_list.append(F("firewall_general", "ok", "A general firewall (%s) is switched on" % name,
+    running = (["the CP-Security firewall"] if t["ours"]["loaded"] else []) + t["others"]
+    if running:
+        out_list.append(F("firewall_general", "ok", "A firewall (%s) is switched on" % ", ".join(running),
                           "The CP-Security admin lock works on top of it: the stricter of the two always applies.", ""))
-        if port and tls.port_is_open(port) is False:
+        name = "firewalld" if "firewalld" in t["others"] else ("ufw" if "ufw" in t["others"] else "")
+        if name and port and tls.port_is_open(port) is False:
             out_list.append(F("panel_port_closed", "warn", "The panel port is closed in %s" % name,
                               "Port %d is not open there, so nobody can reach the panel, not even trusted addresses." % port,
                               "Open it with the button.", _action("open_panel_port", "Open port %d" % port)))
+    elif t["cyberpanel"]["level"] == "bad":
+        out_list.append(F("firewall_general", "warn", "CyberPanel's Firewall page says ON, but no firewall is running",
+                          t["cyberpanel"]["text"] + " Every port that has a program behind it can be reached from outside, "
+                          "except the admin pages that the admin lock protects.",
+                          "Use the Server firewall page: it shows the truth and has a firewall that really works, "
+                          "with the same kind of list. Do not use the Start, Stop or Reload buttons on CyberPanel's page.",
+                          _page("serverfw", "Open Server firewall")))
     else:
-        out_list.append(F("firewall_general", "info", "No general firewall is switched on",
-                          "Every port that has a program behind it can be reached from outside, except the locked "
-                          "admin pages.",
-                          "Switch on CyberPanel's firewall (CyberPanel, Security, Firewall) and keep only the "
-                          "ports you use open."))
+        out_list.append(F("firewall_general", "warn", "No firewall is switched on",
+                          "Every port that has a program behind it can be reached from outside, except the admin pages "
+                          "that the admin lock protects.",
+                          "Use the Server firewall page to allow only the ports you use.",
+                          _page("serverfw", "Open Server firewall")))
     return out_list
 
 

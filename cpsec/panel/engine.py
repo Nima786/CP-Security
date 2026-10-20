@@ -11,7 +11,7 @@ import threading
 import time
 
 from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, ports, provision,
-                selfupdate, settings, sites, tls, updates, util, waf, webserver)
+                selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver)
 from ..util import Result
 
 BUSY = Result(False, "Setup is running right now. Try again when it has finished.", "busy")
@@ -278,6 +278,39 @@ class LiveEngine:
             self._changed()
             return ports.accept(port, accepted)
 
+    # ------------------------------------------------------------------ server firewall
+    def serverfw_state(self):
+        return serverfw.state()
+
+    def _fw_change(self, fn, *args):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return fn(*args)
+
+    def serverfw_add(self, name, proto, address, port):
+        return self._fw_change(serverfw.add_rule, name, proto, address, port)
+
+    def serverfw_remove(self, rule_id, confirmed):
+        return self._fw_change(serverfw.remove_rule, rule_id, confirmed)
+
+    def serverfw_power(self, action, add_in_use, confirmed):
+        return self._fw_change(serverfw.power, action, add_in_use, confirmed)
+
+    def serverfw_keep(self):
+        return self._fw_change(serverfw.confirm)
+
+    def serverfw_undo(self):
+        return self._fw_change(serverfw.revert)
+
+    def serverfw_import(self):
+        return self._fw_change(serverfw.import_cyberpanel)
+
+    def serverfw_add_suggested(self, keys):
+        return self._fw_change(serverfw.add_suggested, keys)
+
     # ------------------------------------------------------------------ security headers
     def headers_state(self):
         return headers.state()
@@ -433,6 +466,7 @@ class DemoEngine:
                         {"address": "45.60.0.30", "label": "Added by owner", "is_home": False}]
         self.never = [{"address": "104.16.0.0/13", "label": "Cloudflare"}, {"address": "172.64.0.0/13", "label": "Cloudflare"}]
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
+        self.fw_enabled, self.fw_rules, self.fw_next, self.fw_pending_until, self.fw_previous = False, [], 1, 0.0, None
         self.h_cfg = {"defaults": dict(headers.DEFAULTS), "sites": {}}
         self.h_sites = {d: {"own": list(own), "taken": [], "block": "", "error": err} for d, own, err in (
             ("blog.example.com", [], ""), ("example.org", [], ""), ("old.example.com", [],
@@ -716,6 +750,135 @@ class DemoEngine:
         self.port_choices["accepted"] = sorted(have)
         return Result(True, "Noted. CP-Security will stop warning you about port %d." % port if accepted
                       else "CP-Security will mention port %d again if it stays open." % port)
+
+    # ------------------------------------------------------------------ server firewall (made-up server)
+    FW_SUGGEST = [("Websites HTTP", "tcp", "", "80", "In use right now by litespeed"),
+                  ("Websites HTTPS", "tcp", "", "443", "In use right now by litespeed"),
+                  ("Program node", "tcp", "", "5000", "In use right now by node"),
+                  ("pdns_server UDP", "udp", "", "53", "In use right now by pdns_server"),
+                  ("litespeed UDP", "udp", "", "443", "In use right now by litespeed"),
+                  ("tunnel test", "tcp", "198.51.100.46", "2053", "Another program already allows this in the firewall")]
+    FW_CYBERPANEL = [("http", "tcp", "0.0.0.0/0", "80"), ("https", "tcp", "0.0.0.0/0", "443"), ("ftp", "tcp", "0.0.0.0/0", "21"),
+                     ("smtp", "tcp", "0.0.0.0/0", "25"), ("dns", "udp", "0.0.0.0/0", "53"), ("ftptls", "tcp", "0.0.0.0/0", "40110-40210"),
+                     ("web-tunnel", "tcp", "0.0.0.0/0", "8440")]
+
+    def _fw_has(self, clean):
+        return any((r["proto"], r["address"], r["port"]) == (clean["proto"], clean["address"], clean["port"]) for r in self.fw_rules)
+
+    def _fw_put(self, clean, source):
+        if self._fw_has(clean):
+            return False
+        self.fw_rules.append(dict(clean, id=self.fw_next, source=source))
+        self.fw_next += 1
+        return True
+
+    def _fw_suggestions(self):
+        out = []
+        for name, proto, address, port, why in self.FW_SUGGEST:
+            clean, _ = serverfw.check_rule(name, proto, address, port)
+            if not self._fw_has(clean):
+                out.append(dict(clean, key="%s:%s:%s" % (clean["proto"], clean["address"], clean["port"]), why=why))
+        return out
+
+    def serverfw_state(self):
+        pending = None
+        if self.fw_pending_until:
+            left = int(self.fw_pending_until - time.time())
+            if left <= 0:
+                self.serverfw_undo()
+            else:
+                pending = {"seconds_left": left, "action": "on"}
+        page_on = True
+        verdict = ("ok", "The CP-Security firewall is ON. Only the ports on the list are open.") if self.fw_enabled else \
+            ("bad", "No firewall is running. Every port that has a program behind it can be reached from the internet, "
+                    "except the admin pages that the admin lock protects.")
+        truth = {"protected": self.fw_enabled, "verdict": {"level": verdict[0], "text": verdict[1]},
+                 "cyberpanel": {"present": True, "page_says_on": page_on, "firewalld_installed": False, "firewalld_running": False,
+                                "rules_listed": len(self.FW_CYBERPANEL), "level": "bad",
+                                "text": "CyberPanel's Firewall page says ON, but the program behind it (firewalld) is not installed. "
+                                        "The rules on that page are only a list: nothing is enforced."},
+                 "ours": {"enabled": self.fw_enabled, "loaded": self.fw_enabled}, "others": []}
+        rules = [dict(r, in_use=r["port"] in ("80", "443", "5000"), used_by=[], text=serverfw.describe(r)) for r in self.fw_rules]
+        return {"truth": truth, "enabled": self.fw_enabled, "loaded": self.fw_enabled, "rules": rules,
+                "builtin": [
+                    {"name": "Replies to connections the server started", "what": "Updates, mail it sends, anything the server asks for.", "port": ""},
+                    {"name": "The server talking to itself", "what": "Websites, databases and caches reach each other inside the server.", "port": ""},
+                    {"name": "Ping and network messages", "what": "Needed for the network to work (and for you to test it).", "port": ""},
+                    {"name": "Server login (SSH)", "what": "Always open so you can never lock yourself out.", "port": "22"},
+                    {"name": "Admin pages and this panel", "what": "Always open here; the admin lock decides who may use them.", "port": "7080, 8090, 8888, 9443"}],
+                "suggestions": self._fw_suggestions(), "cyberpanel_rules": len(self.FW_CYBERPANEL),
+                "pending": pending, "confirm_seconds": serverfw.CONFIRM_SECONDS, "max_rules": serverfw.MAX_RULES}
+
+    def serverfw_add(self, name, proto, address, port):
+        clean, err = serverfw.check_rule(name, proto, address, port)
+        if err:
+            return Result(False, err, "invalid")
+        if not self._fw_put(clean, "you"):
+            return Result(False, "That rule is already on the list.", "exists")
+        return Result(True, "%s is open." % serverfw.describe(clean) if self.fw_enabled
+                      else "Saved: %s. The firewall is off, so this applies when you turn it on." % serverfw.describe(clean))
+
+    def serverfw_remove(self, rule_id, confirmed):
+        rule = next((r for r in self.fw_rules if r["id"] == rule_id), None)
+        if rule is None:
+            return Result(False, "That rule does not exist.", "missing")
+        if self.fw_enabled and not confirmed and rule["port"] in ("80", "443", "5000"):
+            return Result(False, "%s is in use right now. If you remove this rule, nobody outside can reach it any more." % serverfw.describe(rule), "needs_confirm")
+        self.fw_rules = [r for r in self.fw_rules if r["id"] != rule_id]
+        return Result(True, "%s is closed." % serverfw.describe(rule) if self.fw_enabled else "Removed: %s." % serverfw.describe(rule))
+
+    def serverfw_power(self, action, add_in_use, confirmed):
+        if action == "on":
+            if not confirmed:
+                return Result(False, "Please confirm that you want to switch the firewall on.", "needs_confirm")
+            if self.fw_pending_until:
+                return Result(False, "A change is waiting for your answer. Press 'Keep it' or 'Undo' first.", "pending")
+            self.fw_previous = {"enabled": self.fw_enabled, "rules": [dict(r) for r in self.fw_rules]}
+            if add_in_use:
+                for s in self._fw_suggestions():
+                    clean, _ = serverfw.check_rule(s["name"], s["proto"], s["address"], s["port"])
+                    self._fw_put(clean, "in use")
+            self.fw_enabled = True
+            self.fw_pending_until = time.time() + serverfw.CONFIRM_SECONDS
+            return Result(True, "The firewall is ON. Press 'Keep it' within 2 minutes, or it switches itself off again.", "pending")
+        if action == "off":
+            self.fw_enabled, self.fw_pending_until = False, 0.0
+            return Result(True, "The firewall is OFF. Every port with a program behind it can be reached again (the admin lock still works).")
+        if action == "reload":
+            if not self.fw_enabled:
+                return Result(False, "The firewall is off, so there is nothing to reload. Turn it on first.", "off")
+            return Result(True, "The firewall was reloaded from your list (%d rules)." % len(self.fw_rules))
+        return Result(False, "Unknown action.", "invalid")
+
+    def serverfw_keep(self):
+        if not self.fw_pending_until:
+            return Result(False, "Nothing is waiting for an answer.", "none")
+        self.fw_pending_until = 0.0
+        return Result(True, "Kept. The firewall stays on, also after a restart of the server.")
+
+    def serverfw_undo(self):
+        if not self.fw_pending_until or not self.fw_previous:
+            return Result(True, "Nothing to undo.")
+        self.fw_enabled, self.fw_rules = self.fw_previous["enabled"], self.fw_previous["rules"]
+        self.fw_pending_until, self.fw_previous = 0.0, None
+        return Result(True, "The change was undone; the firewall is off again." if not self.fw_enabled
+                      else "The change was undone; the firewall is back to its earlier list.")
+
+    def serverfw_import(self):
+        added = 0
+        for name, proto, address, port in self.FW_CYBERPANEL:
+            clean, _ = serverfw.check_rule(name, proto, address, port)
+            added += 1 if self._fw_put(clean, "cyberpanel") else 0
+        return Result(True, "Copied %d rule%s from CyberPanel's list (%d were already here or always open)." % (
+            added, "" if added == 1 else "s", len(self.FW_CYBERPANEL) - added))
+
+    def serverfw_add_suggested(self, keys):
+        added = 0
+        for s in self._fw_suggestions():
+            if keys is None or s["key"] in keys:
+                clean, _ = serverfw.check_rule(s["name"], s["proto"], s["address"], s["port"])
+                added += 1 if self._fw_put(clean, "other firewall" if s["why"].startswith("Another") else "in use") else 0
+        return Result(True, "Added %d rule%s." % (added, "" if added == 1 else "s")) if added else Result(False, "There is nothing to add.", "none")
 
     # ------------------------------------------------------------------ security headers (made-up websites)
     def _demo_block(self, domain):
