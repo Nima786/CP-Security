@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4
+* **One saved copy is now the default.** After an update the panel keeps only the newest copy of each plugin or theme, and the newest
+  database copy, instead of the newest three. That is enough to go back one step if something shows up later. You can still choose up to
+  5 on the WP Updates page. Websites where you had already chosen a number keep your choice; every other website starts keeping one
+  from its next update. Copies that are already saved stay until you delete them there (or until the next update of the same plugin).
+* A database copy that fails halfway is now removed straight away and no longer triggers the clean-up, so a broken copy can never replace
+  the last good one (this matters more now that only one copy is kept).
 ## 0.9.3
 * **See, limit and delete the copies saved before updates.** New card "Saved copies" at the bottom of the WP Updates page. Before each
   update the panel keeps a copy of the plugin or theme and, once per website, of the database, in the website's own private backup

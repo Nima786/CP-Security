@@ -663,7 +663,7 @@ class DemoEngine:
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
         self.login_helper, self.login_choice = {"shop.example.com": "installed", "staging.example.com": "changed"}, {}
         self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
-        self.copy_keep = 3                                    # saved copies from earlier updates (kind, name, time stamp, size in KB)
+        self.copy_keep = 1                                    # saved copies from earlier updates (kind, name, time stamp, size in KB)
         self.copy_data = {"shop.example.com": [("plugin", "woocommerce", "20261019-093000", 31200), ("plugin", "woocommerce", "20261012-081500", 30900),
                                                ("theme", "bricks", "20261012-081500", 9800), ("database", "", "20261019-093000", 18400)],
                           "blog.example.com": [("plugin", "yoast-seo", "20261017-141000", 14200), ("database", "", "20261017-141000", 4100)]}

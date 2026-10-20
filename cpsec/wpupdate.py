@@ -30,7 +30,7 @@ from .util import Result
 
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 KINDS = ("plugin", "theme")
-KEEP_COPIES = 3                      # the default; the owner can choose 1 to MAX_KEEP on the WP Updates page
+KEEP_COPIES = 1                      # the default; the owner can choose 1 to MAX_KEEP on the WP Updates page
 MAX_KEEP = 5
 MAX_ITEMS = 100
 FATAL = ("There has been a critical error", "Fatal error", "Parse error", "Uncaught ", "Call to undefined",
@@ -200,10 +200,13 @@ def save_database(site, php, stamp):
     """One copy of the website's database in the website's own backup folder. Returns (ok, note)."""
     d = site["home"] + "/cps-backups"
     rc, out = _wp(site, php, "db export %s/db-%s.sql" % (shlex.quote(d), stamp), 900)
-    if rc == 0:                                       # a database copy holds everything the website knows: only its own user may read it
-        _shell(site["user"], "chmod 600 -- %s" % shlex.quote("%s/db-%s.sql" % (d, stamp)), 30)
+    mine = shlex.quote("%s/db-%s.sql" % (d, stamp))
+    if rc != 0:                                       # a half-written copy is worth nothing and must not push out the last good one
+        _shell(site["user"], "rm -f -- %s" % mine, 30)
+        return False, "the database copy could not be made"
+    _shell(site["user"], "chmod 600 -- %s" % mine, 30)    # it holds everything the website knows: only its own user may read it
     _prune(site, r"^db-\d{8}-\d{6}\.sql$")
-    return rc == 0, "" if rc == 0 else "the database copy could not be made"
+    return True, ""
 
 
 # ----------------------------------------------------------------------------- the copies saved before each update

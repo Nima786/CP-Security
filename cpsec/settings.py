@@ -13,7 +13,7 @@ DEFAULTS = {
     # "trusted": only the trusted addresses can reach the panel at all
     "access": "login",
     # how many saved copies of each plugin, theme and database are kept after an update (1 to 5)
-    "copies_keep": 3,
+    "copies_keep": 1,
 }
 
 _lock = threading.Lock()

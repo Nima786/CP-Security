@@ -1,7 +1,7 @@
 import os
 import time
 
-from cpsec import config, wpupdate
+from cpsec import config, settings, wpupdate
 from tests.helpers import EnvTestCase
 
 DOMAIN = "shop.example.com"
@@ -349,8 +349,9 @@ class TheJob(UpdateCase):
 class OldCopies(UpdateCase):
     """Found on the real server: `cp -a` keeps the plugin's old modified time, so the cleanup must go by the time stamp in the name."""
 
-    def run_prune(self, listing, kind="plugin", slug="woo"):
+    def run_prune(self, listing, kind="plugin", slug="woo", keep=3):
         removed = []
+        settings.save({"copies_keep": keep})
 
         def su(cmd):
             script = cmd[5]
@@ -384,6 +385,14 @@ class OldCopies(UpdateCase):
 
     def test_nothing_is_removed_when_there_are_three_or_fewer(self):
         self.assertEqual(self.run_prune(["plugin-woo-20261011-120000", "plugin-woo-20261012-120000"]), [])
+
+    def test_the_start_is_to_keep_only_the_newest_copy(self):
+        names = ["plugin-woo-2026101%d-120000" % d for d in range(1, 4)]
+        removed = self.run_prune(names, keep=1)
+        self.assertEqual(len(removed), 1)
+        self.assertIn(names[0], removed[0])
+        self.assertIn(names[1], removed[0])
+        self.assertNotIn(names[2], removed[0])
 
 
 class UpdatesFromTheMakersOwnServer(UpdateCase):

@@ -126,8 +126,8 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
 * **Saved copies are listed, limited and deleted from the panel (`wpupdate.copies*`).** The folder is the website's own `cps-backups`
   (mode 700). Only names the panel makes are recognised (`plugin|theme-<slug>-<date>-<time>`, `db-<date>-<time>.sql`, strict patterns), listed
   with `du` as the website's user, and only those are removed, as that user, never a name taken from the browser. Deleting is refused
-  while a job runs (the copies are the roll-back). `copies_keep` (1 to 5, default 3) in the panel settings replaces the old constant in
-  the clean-up after each update. New database dumps are `chmod 600`.
+  while a job runs (the copies are the roll-back). `copies_keep` (1 to 5, default 1) in the panel settings replaces the old constant in
+  the clean-up after each update. New database dumps are `chmod 600`; a failed dump is deleted and never triggers the clean-up, so it cannot push out the last good one.
 * **Uploaded plugin and theme zips (`library.py`).** The panel never unpacks or runs a zip. It checks the zip's table of contents
   (one folder, a plugin or theme header with a version, no unsafe paths, links, passwords; limits on size, count and unpacked size),
   keeps it in `/var/lib/cp-security/uploads` (root only, 700/600) and, for an update, pipes it into the website's own

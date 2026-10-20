@@ -37,6 +37,9 @@ class FakeBackupFolders:
             return 0, ""
         if script.startswith("ls -1"):
             return 0, "".join(n + "\n" for n in folder)
+        if script.startswith("rm -f -- "):
+            folder.pop(script.split("/")[-1].strip(), None)
+            return 0, ""
         return 0, ""
 
 
@@ -74,7 +77,7 @@ class Listing(CopiesCase):
 
     def test_the_page_gets_each_website_with_its_totals(self):
         data = wpupdate.copies_state()
-        self.assertEqual(data["keep"], 3)
+        self.assertEqual(data["keep"], 1)
         self.assertEqual([s["site"] for s in data["sites"]], [BLOG, SHOP])
         shop = data["sites"][1]
         self.assertEqual((shop["count"], shop["kb"], shop["newest"]), (5, 30000 + 31200 + 9800 + 18000 + 18400, "2026-10-19 09:30"))
@@ -99,9 +102,9 @@ class Listing(CopiesCase):
 class HowManyAreKept(CopiesCase):
     SITE = {"home": "/home/x", "user": "shopuser", "docroot": "/home/x/public_html"}
 
-    def test_three_is_the_start_and_the_owner_can_choose_one_to_five(self):
-        self.assertEqual(wpupdate.keep_copies(), 3)
-        for n in (1, 2, 4, 5):
+    def test_one_is_the_start_and_the_owner_can_choose_one_to_five(self):
+        self.assertEqual(wpupdate.keep_copies(), 1)
+        for n in (2, 3, 4, 5, 1):
             self.assertTrue(wpupdate.set_keep(n).ok)
             self.assertEqual(wpupdate.keep_copies(), n)
             self.assertEqual(settings.load()["copies_keep"], n)
@@ -113,18 +116,24 @@ class HowManyAreKept(CopiesCase):
             self.assertEqual((res.ok, res.code), (False, "invalid"), bad)
         self.assertEqual(wpupdate.keep_copies(), 2)
 
-    def test_a_damaged_setting_falls_back_to_three(self):
+    def test_a_damaged_setting_falls_back_to_one(self):
         settings.save({"copies_keep": "lots"})
-        self.assertEqual(wpupdate.keep_copies(), 3)
+        self.assertEqual(wpupdate.keep_copies(), 1)
         settings.save({"copies_keep": 99})
         self.assertEqual(wpupdate.keep_copies(), 5)
 
-    def test_after_an_update_only_the_chosen_number_of_the_newest_are_kept(self):
+    def test_after_an_update_only_the_newest_copy_is_kept_unless_the_owner_chose_more(self):
         names = ["plugin-woo-2026101%d-120000" % d for d in range(1, 6)]
         self.folders.folders["shopuser"] = {n: 10 for n in names}
-        wpupdate.set_keep(1)
         wpupdate._clean_old_copies(self.SITE, "plugin", "woo")
         self.assertEqual(sorted(self.folders.folders["shopuser"]), [names[-1]])
+
+    def test_a_larger_choice_keeps_that_many(self):
+        names = ["plugin-woo-2026101%d-120000" % d for d in range(1, 6)]
+        self.folders.folders["shopuser"] = {n: 10 for n in names}
+        wpupdate.set_keep(3)
+        wpupdate._clean_old_copies(self.SITE, "plugin", "woo")
+        self.assertEqual(sorted(self.folders.folders["shopuser"]), names[2:])
 
     def test_the_message_says_what_happens_to_the_copies_already_there(self):
         self.assertIn("newest copy of each", wpupdate.set_keep(1).message)
@@ -153,6 +162,21 @@ class DatabaseCopiesArePrivate(CopiesCase):
         ok, note = self.run_save(False)
         self.assertFalse(ok)
         self.assertFalse([s for s in self.folders.scripts if s.startswith("chmod")])
+
+    def test_a_failed_database_copy_never_pushes_out_the_last_good_one(self):
+        self.folders.folders["shopuser"] = {DB_OLD: 18000}
+        folder = self.folders.folders["shopuser"]
+
+        def su(cmd):
+            script = cmd[5]
+            if "db export" in script:
+                folder["db-20261020-120000.sql"] = 1               # a half-written file is left behind
+                return 1, "Error: mysqldump was killed"
+            return self.folders.su(cmd)
+        self.fake.table.insert(0, (["su"], su))
+        ok, note = wpupdate.save_database(self.SITE, "/php", "20261020-120000")
+        self.assertFalse(ok)
+        self.assertEqual(sorted(folder), [DB_OLD])
 
 
 class Deleting(CopiesCase):
