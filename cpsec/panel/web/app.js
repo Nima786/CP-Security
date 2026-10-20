@@ -1414,34 +1414,40 @@
     const rows = sites.map(s => {
       const [label, kind] = HELPER_STATUS[s.status] || [s.status, ''];
       const ji = working ? inJob[s.site] : null;
-      const names = s.admins.map(a => h('option', { value: a.login, selected: a.login === s.login, text: a.name === a.login ? a.login : a.name + ' (' + a.login + ')' }));
-      const here = [];
-      if (s.status === 'installed') here.push(h('button', { class: 'btn primary', type: 'button', disabled: working, text: 'Open admin', onclick: () => ctl.openAdmin(s.site) }));
-      if (s.checked && s.status !== 'installed' && s.status !== 'unsupported') here.push(h('button', { class: 'btn' + (s.status === 'missing' ? ' primary' : ''), type: 'button', disabled: working, text: s.status === 'changed' ? 'Reinstall' : 'Install on this website', onclick: () => ctl.install([s.site]) }));
-      if (s.status === 'installed' || s.status === 'changed') here.push(h('button', { class: 'btn small', type: 'button', disabled: working, text: 'Remove', onclick: () => ctl.remove([s.site]) }));
-      return h('div', { class: 'door' },
-        h('div', { class: 'door-head' }, h('strong', { class: 'mono', text: s.site }), ji ? null : badge(label, kind),
-          ji ? (ji.status === 'working' ? workingBadge('Working\u2026') : ji.status === 'waiting' ? badge('In line', '') : badge(ji.status === 'done' ? 'done' : 'failed', ji.status === 'done' ? 'ok' : 'bad')) : null),
-        ji && ji.status === 'working' && ji.step ? h('div', { class: 'small muted', style: 'margin-top:.3rem', text: ji.step }) : null,
-        s.problem ? h('div', { class: 'muted small', style: 'margin-top:.3rem', text: s.problem }) : null,
-        s.admins.length ? h('div', { class: 'door-line' }, h('label', { class: 'lbl', for: 'who-' + s.site, text: 'Log in as' }),
-          h('select', { id: 'who-' + s.site, disabled: working || !s.admins.length, 'aria-label': 'Log in to ' + s.site + ' as', onchange: ev => ctl.pickUser(s.site, ev.target.value) }, names)) : null,
-        here.length ? h('div', { class: 'door-actions' }, here) : null);
+      const accounts = s.admins.map(a => h('option', { value: a.login, dir: 'auto', selected: a.login === s.login, text: a.name === a.login ? a.login : a.login + ' \u2013 ' + a.name }));
+      const buttons = [];
+      if (s.status === 'installed') buttons.push(h('button', { class: 'btn primary', type: 'button', disabled: working, 'aria-label': 'Open the dashboard of ' + s.site, text: 'Open admin', onclick: () => ctl.openAdmin(s.site) }));
+      if (s.checked && s.status !== 'installed' && s.status !== 'unsupported') {
+        const again = s.status === 'changed';
+        buttons.push(h('button', { class: 'btn' + (again ? '' : ' primary'), type: 'button', disabled: working, 'aria-label': (again ? 'Reinstall the login helper on ' : 'Install the login helper on ') + s.site, text: again ? 'Reinstall' : 'Install', onclick: () => ctl.install([s.site]) }));
+      }
+      if (s.status === 'installed' || s.status === 'changed') buttons.push(h('button', { class: 'btn', type: 'button', disabled: working, 'aria-label': 'Remove the login helper from ' + s.site, text: 'Remove', onclick: () => ctl.remove([s.site]) }));
+      const tone = s.status === 'installed' ? ' is-ready' : (s.status === 'changed' || s.status === 'unsupported' ? ' is-warn' : '');
+      return h('div', { class: 'login-row' + tone },
+        h('div', { class: 'lr-site' },
+          h('strong', { class: 'lr-name', text: s.site }),
+          ji ? (ji.status === 'working' ? workingBadge('Working\u2026') : ji.status === 'waiting' ? badge('In line', '') : badge(ji.status === 'done' ? 'done' : 'failed', ji.status === 'done' ? 'ok' : 'bad')) : badge(label, kind),
+          ji && ji.status === 'working' && ji.step ? h('div', { class: 'lr-note', text: ji.step }) : null,
+          s.problem ? h('div', { class: 'lr-note', text: s.problem }) : null),
+        s.admins.length ? h('div', { class: 'lr-who' },
+          h('label', { for: 'who-' + s.site, text: 'Log in as' }),
+          h('span', { class: 'pick' }, h('select', { id: 'who-' + s.site, disabled: working, 'aria-label': 'Log in to ' + s.site + ' as', onchange: ev => ctl.pickUser(s.site, ev.target.value) }, accounts))) : null,
+        buttons.length ? h('div', { class: 'lr-actions' }, buttons) : null);
     });
 
     const last = job.status !== 'idle' && (job.items || []).length ? h('section', { class: 'card flush' },
       h('div', { class: 'card-head' }, working ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
         h('h2', { 'aria-live': 'polite', text: working ? (job.action === 'install' ? 'Installing\u2026' : 'Removing\u2026') : 'Finished' }),
         job.counts.done ? badge(job.counts.done + ' done', 'ok') : null, job.counts.failed ? badge(job.counts.failed + ' failed', 'bad') : null),
-      table(['Website', 'Result'], job.items.map(i => h('tr', {}, h('td', { class: 'mono', text: i.site }),
+      table(['Website', 'Result'], job.items.map(i => h('tr', {}, h('td', {}, h('strong', { class: 'lr-name', text: i.site })),
         h('td', {}, i.status === 'working' ? workingBadge('Working\u2026') : i.status === 'waiting' ? badge('In line', '') : badge(i.status === 'done' ? 'done' : 'failed', i.status === 'done' ? 'ok' : 'bad'),
           h('div', { class: 'small ' + (i.status === 'failed' ? '' : 'muted'), text: i.status === 'working' ? i.step : i.message })))), '')) : null;
 
     return h('div', { class: 'stack' },
-      h('section', { class: 'card' },
-        h('p', { text: 'Open any website\u2019s dashboard from here with one click, without typing a password. Each website needs one small helper file, which the panel puts there and tests first. The link it makes works once, for one minute.' }),
-        h('p', { class: 'muted small', style: 'margin-top:.5rem', text: 'It does not matter if a website has a custom login address: the link signs you in directly. It skips a website\u2019s own 2-step login, so this panel\u2019s login is the only gate. Every use is written to the Activity log.' }),
-        h('div', { class: 'row', style: 'margin-top:.9rem' },
+      h('section', { class: 'card login-intro' },
+        h('p', { text: 'Open any website\u2019s dashboard with one click, without typing a password. Each website needs one small helper file, which the panel puts there and tests first. The link it makes works once, for one minute, and it does not matter if a website has a custom login address.' }),
+        h('div', { class: 'note warn', text: 'This skips a website\u2019s own 2-step login, so this panel\u2019s login is the only gate. Every use is written to the Activity log.' }),
+        h('div', { class: 'row' },
           h('button', { class: 'btn primary', type: 'button', disabled: working || !canInstall.length, text: canInstall.length ? 'Install on ' + canInstall.length + ' website' + (canInstall.length > 1 ? 's' : '') + '\u2026' : 'Installed everywhere', onclick: () => ctl.install(null, canInstall.length) }),
           ready.length ? h('button', { class: 'btn', type: 'button', disabled: working, text: ready.length === 1 ? 'Remove from 1 website\u2026' : 'Remove from all ' + ready.length + '\u2026', onclick: () => ctl.remove(null, ready.length) }) : null,
           scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at the websites\u2026') : null)),

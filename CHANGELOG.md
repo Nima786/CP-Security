@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.1
+* **The One-click login page is easier to read and use.** Each website is now one tidy row: the website name is larger and in the
+  normal font (it was small and monospaced), its state sits right next to it, the "Log in as" list has the same width on every row,
+  and the buttons are lined up on the right ("Install", "Open admin", "Remove"). A green mark on the left shows websites that are
+  ready, an amber one shows those that need attention. Accounts are listed login first, then the person's name, so names in
+  Persian or other right-to-left scripts do not jumble the list. The warning that this skips a website's own 2-step login is now
+  a highlighted note at the top.
+* **Works on every screen size.** Wide screens show name, account and buttons on one line; medium screens (tablets, small laptops)
+  give the name its own line; phones stack everything with full-width buttons. Checked at 320, 360, 390, 600, 768, 900, 1024, 1180,
+  1280 and 1920 pixels wide, including a very long website name and a very long account name: nothing sticks out of its row and
+  nothing scrolls sideways. All other pages were checked for sideways scrolling at the common phone, tablet and laptop widths too.
+* A file you upload that turns out not to be a plugin or theme is now removed from the server before the panel answers, not just after
+  (it was already removed within a moment; this makes it certain and removes a rare timing difference).
 ## 0.9.0
 * **One-click admin login for every website.** New page "One-click login": press **Open admin** next to a website and its
   dashboard opens in a new tab, already signed in, without typing a password. It works for any website, including ones with a

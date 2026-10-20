@@ -1277,7 +1277,7 @@ class DemoEngine:
         return Result(True, "Looking at the websites.")
 
     # ------------------------------------------------------------------ one-click login (made-up server)
-    DEMO_ADMINS = {"shop.example.com": [{"login": "owner", "name": "Shop Owner"}, {"login": "sara", "name": "Sara (manager)"}],
+    DEMO_ADMINS = {"shop.example.com": [{"login": "owner", "name": "\u0645\u0647\u062f\u06cc \u0645\u0631\u0627\u062f\u06cc"}, {"login": "sara", "name": "Sara (manager)"}],
                    "blog.example.com": [{"login": "admin", "name": "admin"}], "staging.example.com": [{"login": "dev", "name": "Dev team"}]}
 
     def logins_state(self):

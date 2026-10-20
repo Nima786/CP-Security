@@ -151,6 +151,13 @@ class PanelHandler(BaseHTTPRequestHandler):
             return
         dest = app.upload_target()
         received = 0
+
+        def drop():
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+
         try:
             fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
@@ -161,17 +168,16 @@ class PanelHandler(BaseHTTPRequestHandler):
                     out.write(chunk)
                     received += len(chunk)
             if received != length:
+                drop()
                 self._send(400, b'{"ok": false, "code": "cut_short", "message": "The upload was cut short. Try again."}', "application/json", [])
                 return
             resp = app.handle_upload(req, dest)
+            drop()                                        # gone before the answer goes out, so nobody can ever see it afterwards
             self._send(resp.status, resp.body, resp.ctype, resp.headers)
         except OSError:                                   # the connection stalled or broke, or the disk is full
             self.close_connection = True
         finally:
-            try:
-                os.remove(dest)
-            except OSError:
-                pass
+            drop()
 
     def _serve(self):
         if self.command == "POST" and urlsplit(self.path).path == UPLOAD_PATH:
