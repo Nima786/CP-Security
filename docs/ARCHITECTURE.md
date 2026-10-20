@@ -128,7 +128,9 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   keeps it in `/var/lib/cp-security/uploads` (root only, 700/600) and, for an update, pipes it into the website's own
   `cps-backups` folder through `su` as the website's user (`util.run_with_file`), checks its SHA-256 there, lets WP-CLI
   (`plugin|theme install <zip> --force`, the same as "replace current with uploaded") unpack it as that user, and removes the
-  copy whatever happened. The update itself is `wpupdate.update_one(..., upload=entry)`: the same copy, check, roll back and
+  copy whatever happened. After a job made only of uploaded files nobody is asked anything (`LiveEngine._wpupdate_done`:
+  the new versions are written into the lists directly; a normal "look again" would contact the plugin makers' servers).
+  The update itself is `wpupdate.update_one(..., upload=entry)`: the same copy, check, roll back and
   cache clearing as every other update. The upload request is the only one allowed to be larger than 64 KB: `server.py`
   gates it from the headers (host, session, secret token, size, free disk) BEFORE reading the body, then streams it to a private
   temporary file and removes that whatever happens.

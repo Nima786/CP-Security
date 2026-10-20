@@ -430,21 +430,51 @@ class LiveEngine:
         activity.write("WP_UPDATE", site=item["site"], kind=item["kind"], slug=item["slug"], status=item["status"],
                        source="upload" if item.get("zip") else "automatic")
 
+    def _save_updates_cache(self, state):
+        try:
+            util.write_json(config.P.updates_cache, state)
+        except OSError:
+            pass
+
     def _store_entry(self, entry):
         """Put one website's fresh entry into the saved list."""
         with self._job_lock:
             sites_list = [s for s in self._updates.get("sites", []) if s["site"] != entry["site"]] + [entry]
             self._updates = dict(self._updates, sites=sorted(sites_list, key=lambda s: s["site"]))
             state = self._updates
-        try:
-            util.write_json(config.P.updates_cache, state)
-        except OSError:
-            pass
+        self._save_updates_cache(state)
+
+    def _note_uploaded(self, name, mine):
+        """A website was updated only from files the owner uploaded. Nobody is asked anything afterwards (not WordPress.org,
+        not the plugin makers): the new versions are known, so they are written into the lists directly."""
+        done = [i for i in mine if i["status"] == "done"]
+        for d in done:
+            library.inventory_note_installed(name, d["kind"], d["slug"], d["to"])
+        with self._job_lock:
+            sites = []
+            for s in self._updates.get("sites", []):
+                if s["site"] == name:
+                    s = dict(s, items=[x for x in s.get("items", []) if not any(
+                        x.get("kind") == d["kind"] and x.get("slug") == d["slug"] and library.version_cmp(x.get("to") or "0", d["to"]) <= 0
+                        for d in done)])
+                sites.append(s)
+            self._updates = dict(self._updates, sites=sites)
+            state = self._updates
+        self._save_updates_cache(state)
 
     def _wpupdate_done(self, touched):
-        """Look at the websites again so the list shows what is still waiting. The job is not "finished" until this returns."""
-        library.inventory_refresh(touched)                    # the cards of the uploaded files show what the websites have now
+        """Bring the lists up to date. The job is not "finished" until this returns.
+
+        A website that was updated ONLY from uploaded files is not asked anything (no WordPress.org, no plugin maker): the
+        update counts as done when the website now has the new version and still answers, which was checked already. Any other
+        website is looked at again, because a normal update wipes WordPress's own list of what is waiting."""
+        items = wpupdate.state()["items"]
         for name in touched:
+            mine = [i for i in items if i["site"] == name]
+            if mine and all(i.get("zip") for i in mine):
+                self._note_uploaded(name, mine)
+                continue
+            library.inventory_refresh([name])                  # the cards of the uploaded files show what the websites have now
             entry = updates.look_one(name)
             if entry is not None:
                 self._store_entry(entry)

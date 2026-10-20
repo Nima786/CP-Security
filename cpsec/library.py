@@ -367,6 +367,14 @@ def _inventory_run(only):
             _inv["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def inventory_note_installed(site, kind, slug, version):
+    """A plugin or theme was just updated from a file: remember the new version. Nobody is asked anything."""
+    with _lock:
+        have = _inv["sites"].get(site, {}).get(kind, {}).get(slug) if _inv["sites"].get(site, {}).get("checked") else None
+        if have is not None:
+            have["version"] = version
+
+
 def inventory_refresh(names):
     """Read some websites again right now (after they were updated). Returns when done."""
     fresh = {n: _read_site(n) for n in names}

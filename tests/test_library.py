@@ -329,3 +329,23 @@ class ReadingTheWebsites(EnvTestCase):
         self.assertEqual(st["status"], "done")
         self.assertTrue(st["finished"])
         self.assertTrue(st["sites"]["shop.example.com"]["checked"])
+
+
+class NotingANewVersion(EnvTestCase):
+    def setUp(self):
+        super().setUp()
+        with library._lock:
+            library._inv.update(status="done", started="", finished="", sites={
+                "a.example.com": {"checked": True, "plugin": {"x": {"version": "1.0", "status": "active"}}, "theme": {}},
+                "b.example.com": {"checked": False}})
+
+    def test_the_new_version_is_written_down_without_asking_anybody(self):
+        library.inventory_note_installed("a.example.com", "plugin", "x", "2.0")
+        self.assertEqual(library.inventory_state()["sites"]["a.example.com"]["plugin"]["x"], {"version": "2.0", "status": "active"})
+        self.assertEqual(self.fake.calls, [])
+
+    def test_unknown_things_are_ignored(self):
+        library.inventory_note_installed("a.example.com", "plugin", "nope", "2.0")
+        library.inventory_note_installed("b.example.com", "plugin", "x", "2.0")
+        library.inventory_note_installed("zzz.example.com", "theme", "x", "2.0")
+        self.assertEqual(library.inventory_state()["sites"]["a.example.com"]["plugin"], {"x": {"version": "1.0", "status": "active"}})

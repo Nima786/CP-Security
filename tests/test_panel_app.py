@@ -968,3 +968,81 @@ class UploadedFiles(PanelCase):
         resp, data = self.request("POST", "/api/uploads/upload", {"file": "x"})
         self.assertEqual(resp.status, 400)
         self.assertIn("zip file as the body", data["message"])
+
+
+class AfterUpdatesFromUploadedFiles(PanelCase):
+    """Updating from a file you uploaded must not ask anybody afterwards: not WordPress.org, not the plugin makers."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.engine._updates = {"status": "done", "finished": "x", "sites": [
+            {"site": "test.example.com", "checked": True, "items": [
+                {"what": "Admin Columns Pro", "slug": "admin-columns-pro", "kind": "plugin", "from": "6.4.18", "to": "7.1.7"},
+                {"what": "Other", "slug": "other", "kind": "plugin", "from": "1", "to": "2"},
+                {"what": "WordPress itself", "kind": "core-minor", "from": "", "to": "6.8.11"}]},
+            {"site": "live.example.com", "checked": True, "items": [{"what": "Other", "slug": "other", "kind": "plugin", "from": "1", "to": "2"}]}]}
+        self.look = self.patch("cpsec.panel.engine.updates.look_one", return_value=None)
+        self.refresh = self.patch("cpsec.panel.engine.library.inventory_refresh")
+        self.noted = self.patch("cpsec.panel.engine.library.inventory_note_installed")
+
+    def job(self, *items):
+        self.patch("cpsec.panel.engine.wpupdate.state", return_value={"items": list(items)})
+
+    def item(self, site="test.example.com", slug="admin-columns-pro", to="7.1.7", status="done", zip="0123456789abcdef"):
+        d = {"site": site, "kind": "plugin", "slug": slug, "status": status, "to": to, "from": "6.4.18"}
+        if zip:
+            d["zip"] = zip
+        return d
+
+    def left(self, site="test.example.com"):
+        return [(i.get("slug") or i["kind"]) for s in self.engine._updates["sites"] if s["site"] == site for i in s["items"]]
+
+    def test_a_website_updated_only_from_files_is_not_asked_anything(self):
+        self.job(self.item())
+        self.engine._wpupdate_done(["test.example.com"])
+        self.look.assert_not_called()
+        self.refresh.assert_not_called()
+        self.noted.assert_called_once_with("test.example.com", "plugin", "admin-columns-pro", "7.1.7")
+
+    def test_what_was_just_installed_leaves_the_waiting_list_and_the_rest_stays(self):
+        self.job(self.item())
+        self.engine._wpupdate_done(["test.example.com"])
+        self.assertEqual(self.left(), ["other", "core-minor"])
+        self.assertEqual(self.left("live.example.com"), ["other"], "other websites are untouched")
+        import json
+        with open(config.P.updates_cache) as f:
+            saved = json.load(f)
+        self.assertEqual([i.get("slug") for s in saved["sites"] if s["site"] == "test.example.com" for i in s["items"]], ["other", None])
+
+    def test_a_newer_update_than_the_file_stays_on_the_list(self):
+        self.engine._updates["sites"][0]["items"][0]["to"] = "7.2.0"
+        self.job(self.item(to="7.1.7"))
+        self.engine._wpupdate_done(["test.example.com"])
+        self.assertIn("admin-columns-pro", self.left())
+
+    def test_a_failed_or_skipped_file_update_changes_nothing(self):
+        for status in ("failed", "restored", "skipped"):
+            self.job(self.item(status=status))
+            self.engine._wpupdate_done(["test.example.com"])
+        self.assertIn("admin-columns-pro", self.left())
+        self.noted.assert_not_called()
+        self.look.assert_not_called()
+
+    def test_a_website_with_a_normal_update_is_still_looked_at_again(self):
+        self.job(self.item(site="live.example.com", slug="other", to="2", zip=None))
+        self.engine._wpupdate_done(["live.example.com"])
+        self.look.assert_called_once_with("live.example.com")
+        self.refresh.assert_called_once_with(["live.example.com"])
+
+    def test_a_website_with_both_kinds_is_looked_at_again(self):
+        self.job(self.item(), self.item(slug="other", to="2", zip=None))
+        self.engine._wpupdate_done(["test.example.com"])
+        self.look.assert_called_once_with("test.example.com")
+
+    def test_each_website_is_judged_on_its_own(self):
+        self.job(self.item(), self.item(site="live.example.com", slug="other", to="2", zip=None))
+        self.engine._wpupdate_done(["live.example.com", "test.example.com"])
+        self.look.assert_called_once_with("live.example.com")
+        self.noted.assert_called_once()

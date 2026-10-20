@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2
+* **Updating from an uploaded file no longer asks any plugin maker anything, before or after.** Measured on the real server by watching every
+  outside name the server looked up: the update itself only contacts api.wordpress.org (WordPress's own check after any install, the
+  same as in its dashboard), never a plugin maker. What used to happen afterwards: the panel looked at the website again with the
+  "ask the plugin makers" refresh, which contacted the makers' servers (WPCodeBox, Crocoblock, Bricks and so on). A website that was
+  updated only from uploaded files is now not looked at again: the new version is known, so the lists are corrected directly
+  (the updated item leaves the waiting list, the website card shows the new version). Success is judged the way WordPress does it:
+  the website now has the new version, and it still answers. Websites that had a normal update are still looked at again, because a
+  normal update wipes WordPress's own list of what is waiting.
+* The confirmation window and the upload box now say that nobody is asked about licences.
+
 ## 0.8.1
 * **The normal Update button now uses a file you uploaded when there is one.** Found with the owner: Admin Columns Pro 7.1.7 was uploaded,
   but the update was started from the normal list, which asks the plugin maker's server. That server answered "the update package

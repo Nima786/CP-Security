@@ -1152,7 +1152,7 @@
       h('div', { class: 'card-head' }, h('h2', { text: 'Update by uploading a file' }), zips.length ? badge(String(zips.length)) : null,
         scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at what each website has\u2026') : null,
         zips.length ? h('button', { class: 'btn small right', type: 'button', disabled: scanning || ctl.busy, text: 'Check the websites again', onclick: ctl.rescan }) : null),
-      h('p', { class: 'muted pad', style: 'margin:.9rem 0 .75rem', text: 'For plugins and themes that cannot update by themselves, such as paid ones. Upload the zip you got from the maker once, then choose the websites to update. Each website is saved first, checked afterwards and put back if it breaks. The file stays on the server until you delete it here.' }),
+      h('p', { class: 'muted pad', style: 'margin:.9rem 0 .75rem', text: 'For plugins and themes that cannot update by themselves, such as paid ones. Upload the zip you got from the maker once, then choose the websites to update. Each website is saved first, checked afterwards and put back if it breaks. Nobody is asked about licences: an update counts as done when the website has the new version and still answers. The file stays on the server until you delete it here.' }),
       drop, sending,
       cards,
       ticked.length ? h('div', { class: 'card-foot row' },
@@ -1342,7 +1342,7 @@
         h('p', { text: 'These will be updated now, one after the other:' }),
         h('ul', { class: 'plain' }, items.map(i => h('li', {}, h('span', { class: 'mono', text: i.site }), ' \u2013 ' + i.what + ' ', h('span', { class: 'mono muted', text: i.from + ' \u2192 ' + i.to })))),
         careful.length ? h('p', { class: 'error', style: 'min-height:0', text: 'Careful: ' + careful.map(i => i.what).join(', ') + ' can change how a shop or a page looks and works. If you have a test copy of this website, update that one first.' }) : null,
-        items.some(i => i.zip) ? h('p', { class: 'small', text: 'The files come from your upload, not from WordPress.org. They run on those websites, so use only files you got from the plugin or theme\u2019s maker.' }) : null,
+        items.some(i => i.zip) ? h('p', { class: 'small', text: 'The files come from your upload, not from WordPress.org. They run on those websites, so use only files you got from the plugin or theme\u2019s maker. Nobody is asked about licences: an update counts as done when the website has the new version and still answers.' }) : null,
         h('p', { class: 'muted small', text: 'Before each update a copy of the files is saved, and once per website a copy of the database. Afterwards the website is checked. If it does not work, the old version is put back and you are told. Putting files back cannot undo changes an update made to the database; that is what the database copy is for.' }));
       if (!await dialog({ title: 'Update ' + items.length + ' item' + (items.length > 1 ? 's' : '') + '?', content, ok: 'Start updating' })) return;
       starting = new Set(items.map(i => keyOf(i.site, i.kind, i.slug)));
