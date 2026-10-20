@@ -482,66 +482,122 @@
         h('div', { class: 'card-foot' }, neverForm)));
   }
 
-  // ------------------------------------------------------------------ open ports
+﻿  // ------------------------------------------------------------------ open ports
   const PORT_STATUS = {
-    open: ['Open to everyone', 'warn'], refused: ['Refused by the server firewall', 'ok'], locked: ['Trusted addresses only', 'ok'], closed: ['This server only', 'ok'],
-    private: ['Private network only', 'ok'], idle: ['Nothing running', ''],
+    open: 'Open to everyone', refused: 'Refused by the server firewall', locked: 'Trusted addresses only', closed: 'This server only',
+    private: 'Private network only', idle: 'Nothing running', mixed: 'Partly limited',
   };
+  const LOCKED_BY = { default: 'Limited automatically, because this is an admin page.', you: 'You limited this door.', panel: 'Who may reach the panel is set on the Settings page.' };
 
   async function viewPorts() {
     const { data } = await api('/api/ports');
-    const head = pageHead('Open ports', 'The doors this server has open, who can reach each one, and which ones you keep for trusted addresses only.');
+    const head = pageHead('Open ports', 'Every program on this server waits for visitors at a numbered \u201cdoor\u201d (a port). Here you see who uses each door today, and you can limit a door so that only your trusted addresses can use it.');
     if (!data.supported) return h('div', { class: 'stack' }, head, card(null, empty(data.message)));
 
-    const lockPort = async r => {
-      const lines = [h('p', { text: r.warn || ('Only your trusted addresses (' + data.trusted + ') will be able to reach ' + r.name + '. Everybody else is refused.') })];
-      if (!data.client_ip_trusted) lines.push(h('p', { class: 'error', text: 'Your own address (' + data.client_ip + ') is not on the trusted list, so you would lose access to it too. Add it on the Admin access page first.' }));
-      if (!await dialog({ title: 'Lock port ' + r.port + '?', content: h('div', {}, lines), ok: 'Lock it', danger: !!r.warn })) return;
-      await act('/api/ports/lock', { port: r.port, confirmed: true }, 'Updating the lock…');
-      redraw();
-    };
-    const openPort = async r => {
-      if (!await confirmBox('Open port ' + r.port + ' to everybody?', r.open_warning || ('Port ' + r.port + ' will be open to everybody again.'), 'Open it', true)) return;
-      await act('/api/ports/unlock', { port: r.port, confirmed: true }, 'Updating the lock…');
-      redraw();
-    };
-    const accept = async (r, on) => { await act('/api/ports/accept', { port: r.port, accepted: on }); redraw(); };
-
-    const small = isSmall();
-    const rows = data.ports.map(r => {
-      const [label, kind] = PORT_STATUS[r.status] || [r.status, ''];
-      const badKind = r.level === 'bad' ? 'bad' : (r.level === 'warn' ? 'warn' : kind);
-      const buttons = [];
-      if (r.can_lock) buttons.push(h('button', { class: 'btn small' + (r.level === 'bad' || r.level === 'warn' ? ' primary' : ''), type: 'button', text: 'Lock it', onclick: () => lockPort(r) }));
-      if (r.can_open) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Open it up', onclick: () => openPort(r) }));
-      if (r.ignored) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Warn me again', onclick: () => accept(r, false) }));
-      else if (r.can_accept) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'I know about this', onclick: () => accept(r, true) }));
-      // on a phone there is no room for a third column: the buttons go under the status instead
-      const actions = buttons.length ? h('div', { class: 'row', style: small ? 'margin-top:.6rem' : 'justify-content:flex-end' }, buttons) : null;
-      return h('tr', {},
-        h('td', {},
-          h('div', {}, h('span', { class: 'mono', text: String(r.port) }), ' ', h('strong', { text: r.name })),
-          h('div', { class: 'muted small', text: r.what }),
-          h('div', { class: 'small' }, badge(r.kind_name), r.programs.length ? h('span', { class: 'muted', text: '  ' + r.programs.join(', ') }) : null)),
-        h('td', {},
-          badge(label, badKind),
-          h('div', { class: 'muted small', text: r.status_text }),
-          r.advice ? h('div', { class: 'small', style: 'margin-top:.25rem', text: r.advice }) : null,
-          !r.can_lock && r.status === 'open' && r.cannot_lock_reason ? h('div', { class: 'muted small', text: r.cannot_lock_reason }) : null,
-          small ? actions : null),
-        small ? null : h('td', { class: 'actions' }, actions));
+    // doors that belong together are one line (80 and 443, or 465 and 587)
+    const groups = [], index = {};
+    data.ports.forEach(r => {
+      if (!(r.group in index)) { index[r.group] = groups.length; groups.push({ key: r.group, rows: [] }); }
+      groups[index[r.group]].rows.push(r);
     });
+    const RANK = { bad: 0, warn: 1, info: 2, ok: 3 };
+    groups.forEach(g => {
+      g.head = g.rows[0];
+      g.ports = g.rows.map(r => r.port).sort((a, b) => a - b);
+      const statuses = new Set(g.rows.map(r => r.status));
+      g.status = statuses.size === 1 ? g.rows[0].status : 'mixed';
+      g.level = g.rows.map(r => r.level).sort((a, b) => RANK[a] - RANK[b])[0];
+      g.lockable = g.rows.filter(r => r.can_lock);
+      g.openable = g.rows.filter(r => r.can_open);
+      g.acceptable = g.rows.filter(r => r.can_accept);
+      g.ignored = g.rows.filter(r => r.ignored);
+      g.reachable = g.rows.some(r => ['open', 'private', 'refused'].includes(r.status));
+      g.limited = g.rows.some(r => r.status === 'locked' || r.status === 'idle');
+    });
+    const portsText = g => (g.ports.length > 1 ? 'ports ' : 'port ') + g.ports.join(', ');
+    const attention = groups.filter(g => g.reachable && (g.level === 'bad' || g.level === 'warn'));
+    const inUse = groups.filter(g => g.reachable && !attention.includes(g));
+    const limited = groups.filter(g => !g.reachable && g.limited);
+    const onlyHere = groups.filter(g => !g.reachable && !g.limited);
 
-    const attention = data.counts.bad + data.counts.warn;
-    const summary = card(null,
-      h('div', { class: 'row' },
-        attention ? badge(attention + ' to look at', data.counts.bad ? 'bad' : 'warn') : badge('nothing to worry about', 'ok'),
-        h('span', { class: 'muted', text: 'Lock a door and only your ' + data.trusted + ' trusted address' + (data.trusted === 1 ? '' : 'es') + ' can use it.' })),
-      h('p', { class: 'muted small', style: 'margin-top:.75rem', text: 'This shows what the programs on the server allow. A firewall outside the server, such as your hosting company\u2019s, may close more.'
-        + (data.firewall ? ' A firewall (' + data.firewall + ') is also switched on here.' : '') + ' Only TCP doors are listed. Nothing is locked unless you press the button, and you can undo every choice.' }));
+    const chips = () => data.trusted_list.map(t => h('span', { class: 'chip', title: t.label || '' }, t.label ? t.label + ' \u00b7 ' : '', h('span', { class: 'mono', text: t.address })));
+    const notTrusted = () => data.client_ip_trusted ? null : h('p', { class: 'error', style: 'min-height:0', text: 'The address you are using now (' + data.client_ip + ') is not on the trusted list, so you would lose access to this too. Add it on the Admin access page first.' });
 
-    return h('div', { class: 'stack' }, head, summary,
-      h('section', { class: 'card flush' }, table(small ? ['Door', 'Who can reach it'] : ['Door', 'Who can reach it', ''], rows, 'No open ports were found.')));
+    const limit = async g => {
+      const r = g.head;
+      const content = h('div', {},
+        h('p', {}, 'Only these addresses will be able to reach ', h('strong', { text: r.name }), ' (' + portsText(g) + '). Everybody else is refused.'),
+        h('div', { class: 'chips', style: 'margin-bottom:.75rem' }, chips()),
+        h('p', { class: 'small' }, h('strong', { text: 'Used today by: ' }), r.uses),
+        h('p', { class: 'small' }, h('strong', { text: 'What would change: ' }), r.if_limited),
+        notTrusted());
+      if (!await dialog({ title: 'Limit ' + r.name + ' to your trusted addresses?', content, ok: 'Limit it', danger: !!r.warn && !r.nothing_stops })) return;
+      for (const row of g.lockable) {
+        const res = await act('/api/ports/lock', { port: row.port, confirmed: true }, 'Updating the lock\u2026');
+        if (!res.ok) break;
+      }
+      redraw();
+    };
+    const openUp = async g => {
+      const r = g.openable[0];
+      if (!await confirmBox('Open ' + g.head.name + ' to everybody?', r.open_warning || (g.head.name + ' (' + portsText(g) + ') will be open to everybody again.'), 'Open it', true)) return;
+      for (const row of g.openable) {
+        const res = await act('/api/ports/unlock', { port: row.port, confirmed: true }, 'Updating the lock\u2026');
+        if (!res.ok) break;
+      }
+      redraw();
+    };
+    const know = async (g, on) => {
+      for (const row of (on ? g.acceptable : g.ignored)) await act('/api/ports/accept', { port: row.port, accepted: on });
+      redraw();
+    };
+
+    const line = (label, text, cls) => h('div', { class: 'door-line' }, h('span', { class: 'lbl', text: label }), h('span', { class: cls || '', text }));
+    const doorRow = (g, sectionSays) => {
+      const r = g.head;
+      const kind = g.level === 'bad' ? 'bad' : g.level === 'warn' ? 'warn' : ['locked', 'closed', 'refused'].includes(g.status) ? 'ok' : '';
+      const buttons = [];
+      if (g.lockable.length) buttons.push(h('button', { class: 'btn small' + (g.level === 'bad' || g.level === 'warn' ? ' primary' : ''), type: 'button', text: 'Limit to trusted addresses', onclick: () => limit(g) }));
+      if (g.openable.length) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Open to everyone', onclick: () => openUp(g) }));
+      if (g.ignored.length) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'Warn me again', onclick: () => know(g, false) }));
+      else if (g.acceptable.length) buttons.push(h('button', { class: 'btn small', type: 'button', text: 'I know about this', onclick: () => know(g, true) }));
+      const why = g.status === 'locked' && LOCKED_BY[r.locked_by] ? LOCKED_BY[r.locked_by] : '';
+      return h('div', { class: 'door' },
+        h('div', { class: 'door-head' }, h('strong', { text: r.name }), h('span', { class: 'muted small mono', text: portsText(g) }), sectionSays === g.status ? null : badge(PORT_STATUS[g.status] || g.status, kind)),
+        line('Used by', r.uses),
+        g.status === 'locked' || g.status === 'idle' ? null : line('If you limit it', r.if_limited, r.nothing_stops ? 'safe' : ''),
+        why ? h('div', { class: 'muted small', style: 'margin-top:.35rem', text: why }) : null,
+        g.status === 'refused' ? h('div', { class: 'muted small', style: 'margin-top:.35rem', text: r.status_text }) : null,
+        r.advice && g.reachable ? h('div', { class: 'small', style: 'margin-top:.4rem', text: r.advice }) : null,
+        !g.lockable.length && g.reachable && r.cannot_lock_reason && r.service !== 'web' ? h('div', { class: 'muted small', style: 'margin-top:.35rem', text: r.cannot_lock_reason }) : null,
+        buttons.length ? h('div', { class: 'door-actions' }, buttons) : null);
+    };
+    const section = (title, sub, items, says) => items.length ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: title }), badge(String(items.length)), h('span', { class: 'muted small', text: sub })),
+      items.map(g => doorRow(g, says))) : null;
+
+    const banner = attention.length
+      ? h('div', { class: 'banner ' + (attention.some(g => g.level === 'bad') ? 'bad' : 'warn') }, icon('alert'), h('div', {}, h('div', { text: attention.length + (attention.length === 1 ? ' door needs' : ' doors need') + ' a look' }), h('div', { class: 'sub', text: 'Open to the whole internet, and probably not meant to be.' })))
+      : h('div', { class: 'banner ok' }, icon('check'), h('div', {}, h('div', { text: 'Nothing here looks wrong' }), h('div', { class: 'sub', text: 'Every door open to the internet is one a normal server uses.' })));
+
+    const trustedCard = card(null,
+      h('div', { class: 'row' }, h('strong', { text: 'Your trusted addresses' }), badge(String(data.trusted), data.trusted ? 'ok' : 'bad'),
+        h('button', { class: 'btn small right', type: 'button', text: 'Change the list', onclick: () => { location.hash = '#/access'; } })),
+      h('p', { class: 'muted', style: 'margin:.5rem 0 .75rem', text: 'When you limit a door, only these addresses get through. Everybody else is refused: customers, other servers, and you too if your own address is not on this list.' }),
+      h('div', { class: 'chips' }, chips()),
+      notTrusted());
+
+    const hereCard = onlyHere.length ? h('section', { class: 'card flush' },
+      h('details', { class: 'quiet' },
+        h('summary', { text: onlyHere.length + (onlyHere.length === 1 ? ' door that only this server can reach' : ' doors that only this server can reach') + ' (nothing to decide)' }),
+        h('ul', { class: 'plain', style: 'margin-top:.6rem' }, onlyHere.map(g => h('li', {}, h('span', { class: 'mono', text: g.ports.join(', ') }), ' ', h('strong', { text: g.head.name }), g.head.what ? h('span', { class: 'muted', text: ' \u2013 ' + g.head.what }) : null))))) : null;
+
+    return h('div', { class: 'stack' }, head, banner, trustedCard,
+      section('Worth a look', 'Open to everyone. Check that you want this.', attention),
+      section('Open to everyone', 'Normal doors that people or other servers use. If a line says nothing would stop working, you can limit the door safely.', inUse, 'open'),
+      section('Limited to your trusted addresses', 'Only the addresses on your list get through.', limited, 'locked'),
+      hereCard,
+      h('p', { class: 'muted small', text: 'This shows what the programs on the server allow. A firewall outside the server, such as your hosting company\u2019s, may close more' + (data.firewall ? ', and a firewall (' + data.firewall + ') is also switched on here' : '') + '. Only TCP doors are listed. You can undo every choice.' }));
   }
 
   // ------------------------------------------------------------------ server firewall

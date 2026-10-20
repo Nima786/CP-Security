@@ -261,3 +261,21 @@ summary { cursor: pointer; font-weight: 600; color: var(--brand); }
 .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
 ul.plain { margin: .3rem 0 .7rem 1.1rem; padding: 0; }
 ul.plain li { margin: .15rem 0; }
+
+/* ---------- open ports: one block per door, in plain words ---------- */
+.door { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); }
+.door:last-child { border-bottom: 0; }
+.door-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.door-head .badge { margin-left: auto; }
+.door-line { display: flex; gap: .75rem; margin-top: .4rem; font-size: .94rem; }
+.door-line .lbl { flex: 0 0 8rem; color: var(--muted); }
+.door-line .safe { color: var(--ok); font-weight: 600; }
+.door-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
+.chip { display: inline-flex; align-items: center; gap: .3rem; padding: .15rem .65rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); font-size: .85rem; }
+details.quiet { padding: .9rem 1.25rem; }
+@media (max-width: 720px) {
+  .door { padding: .9rem 1rem; }
+  .door-line { flex-direction: column; gap: 0; }
+  .door-line .lbl { flex: none; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
+  .door-head .badge { margin-left: 0; }
+}

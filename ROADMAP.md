@@ -53,7 +53,7 @@ printing, so a terminal menu and a browser panel can share it.
 ## M7 – More protection, all of it visible and switchable 🚧
 Rule for everything here: explained in plain words, shown on a page, and the owner can switch it on or off
 (for all websites or for one), because other servers have other needs.
-- ✅ Open ports: every listening port, what it is, who can reach it; lock to trusted addresses, open again, or "I know about this"
+- ✅ Open ports: every listening port, what it is, who uses it today and what would stop if it were limited (from the server's real websites, mailboxes, FTP accounts and domains); limit to trusted addresses, open again, or "I know about this"
 - ✅ Server firewall: tells the truth about CyberPanel's Firewall page, and a firewall that really works (list of ports, TCP/UDP, addresses; on, off, reload; a 2-minute "Keep it" safety net)
 - ✅ Security headers (LiteSpeed Enterprise): a safe set on by default, the risky ones off; per website; takes over a site's own
   header lines only on request and gives them back on removal; checks the live answer and undoes the change if a website stops answering

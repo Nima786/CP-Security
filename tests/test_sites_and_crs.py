@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 from cpsec import config, crs_convert, sites, updates, util
 from tests.helpers import EnvTestCase

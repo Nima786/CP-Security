@@ -775,12 +775,18 @@ class DemoEngine:
         s = set(p for p in config.ADMIN_PORTS if p not in self.port_choices["opened"])
         return s | set(self.port_choices["locked"])
 
+    DEMO_FACTS = {"websites": ["blog.example.com", "example.org", "shop.example.com", "staging.example.com"],
+                  "mail_domains": [], "mailboxes": 0, "ftp": ["shopuploader", "blogeditor"], "dns": ["example.org", "example.com"]}
+    DEMO_COMMANDS = {5000: ["/usr/bin/node, started in /opt/inventory-app, service inventory.service, run by root"]}
+
     def ports_state(self):
         locked_set = self._demo_lock_set()
-        found = [ports._row(p, reach, progs, self.port_choices, locked_set) for p, reach, progs in self.DEMO_LISTENING]
+        found = [ports._row(p, reach, progs, self.port_choices, locked_set, None, self.DEMO_FACTS, self.DEMO_COMMANDS.get(p))
+                 for p, reach, progs in self.DEMO_LISTENING]
         found.sort(key=lambda r: (ports.LEVEL_ORDER[r["level"]], r["port"]))
         counts = {lvl: sum(1 for r in found if r["level"] == lvl) for lvl in ports.LEVEL_ORDER}
-        return {"supported": True, "ports": found, "counts": counts, "firewall": "", "trusted": len(self.trusted), "message": ""}
+        return {"supported": True, "ports": found, "counts": counts, "firewall": "", "trusted": len(self.trusted),
+                "trusted_list": [{"address": t["address"], "label": t["label"]} for t in self.trusted], "message": ""}
 
     def ports_lock(self, port, caller_ip, confirmed):
         row = next((r for r in self.ports_state()["ports"] if r["port"] == port), None)

@@ -1,4 +1,19 @@
-﻿# Changelog
+# Changelog
+
+## 0.7.0
+* **The Open ports page now says who uses each door and what would stop if you limited it.** Before, a door was just a
+  name and a button. Now every door shows "Used by" and "If you limit it", worked out from this server itself: the real
+  list of websites, whether any mailboxes or email domains exist (so the mail doors say "nothing would stop working" on a
+  server without mail), the FTP accounts, and the domains the server answers DNS for. Whatever cannot be read is never guessed:
+  the general sentence is used instead. A program CP-Security does not know says where it comes from (its file, folder, service
+  name and owner, never its arguments, which can hold passwords).
+* **A short list at the top of the page shows your trusted addresses** (with their names), a button to change the list, and a
+  warning when the address you are using now is not on it.
+* **Less clutter.** Doors that belong together are one line (80 and 443; 465 and 587; the two POP3 ports; the two IMAP ports). The page
+  is in sections: "Worth a look", "Open to everyone", "Limited to your trusted addresses", and a folded list of the doors only this
+  server can reach (nothing to decide). The tags that said "Normal server service", the repeated "anybody on the internet can try to
+  reach it" sentence and the long grey paragraph are gone. Buttons say what they do: "Limit to trusted addresses" and "Open to
+  everyone". Limiting a grouped door limits all its ports together; the dialog shows who gets through and what would change.
 
 ## 0.6.2
 * **Plugins that only start inside the WordPress admin area are found.** Some plugins begin with "if this is not the admin

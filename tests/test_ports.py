@@ -64,7 +64,7 @@ class Reading(PortsCase):
         self.assertEqual(rows[0]["port"], 6379)                       # the worst first
 
     def test_the_ssh_program_is_recognised_on_any_port(self):
-        name, kind, _, _ = ports._identify(2222, ["sshd"])
+        name, kind, _, _, _ = ports._identify(2222, ["sshd"])
         self.assertEqual((name, kind), ("Server login (SSH)", "service"))
 
     def test_the_fixed_doors_cannot_be_locked(self):
@@ -277,3 +277,159 @@ class WithTheServerFirewall(PortsCase):
 
     def test_without_the_firewall_nothing_changes(self):
         self.assertEqual(by_port(ports.rows(), 5000)["status"], "open")
+
+
+EXTRA_SS = (
+    'LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("litespeed",pid=900,fd=22))\n'
+    'LISTEN 0 100 0.0.0.0:465 0.0.0.0:* users:(("master",pid=650,fd=13))\n'
+    'LISTEN 0 100 0.0.0.0:587 0.0.0.0:* users:(("master",pid=650,fd=14))\n'
+    'LISTEN 0 100 0.0.0.0:25 0.0.0.0:* users:(("master",pid=650,fd=15))\n'
+    'LISTEN 0 100 0.0.0.0:21 0.0.0.0:* users:(("pure-ftpd-mysql",pid=651,fd=3))\n'
+    'LISTEN 0 100 0.0.0.0:53 0.0.0.0:* users:(("pdns_server",pid=652,fd=3))\n'
+    'LISTEN 0 100 0.0.0.0:4545 0.0.0.0:* users:(("tunnel",pid=660,fd=3))\n'
+    'LISTEN 0 100 0.0.0.0:4546 0.0.0.0:* users:(("tunnel",pid=660,fd=4))\n'
+)
+FACTS = {"websites": ["a.example.com", "b.example.com"], "mail_domains": [], "mailboxes": 0, "ftp": [], "dns": []}
+
+
+class InPlainWords(PortsCase):
+    """The page tells the owner who uses each door today and what would stop if it were limited."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake.table.insert(0, (["ss"], (0, SS.replace('LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:* users:(("systemd-resolve",pid=1,fd=14))\n', "") + EXTRA_SS)))
+
+    def row(self, port, facts=FACTS, commands=None):
+        self.patch("cpsec.ports.usage_facts", return_value=facts)
+        self.patch("cpsec.ports.program_info", side_effect=lambda pid: commands.get(pid, "") if commands else "")
+        return by_port(ports.rows(details=True), port)
+
+    def test_doors_that_belong_together_share_a_group(self):
+        rows = ports.rows()
+        self.assertEqual(by_port(rows, 80)["group"], by_port(rows, 443)["group"])
+        self.assertEqual(by_port(rows, 465)["group"], by_port(rows, 587)["group"])
+        self.assertNotEqual(by_port(rows, 25)["group"], by_port(rows, 465)["group"], "receiving mail and sending mail are different choices")
+        self.assertNotEqual(by_port(rows, 4545)["group"], by_port(rows, 4546)["group"], "two unknown doors are never merged")
+
+    def test_the_websites_are_named_and_cannot_be_limited(self):
+        r = self.row(80)
+        self.assertIn("2 websites", r["uses"])
+        self.assertIn("a.example.com", r["uses"])
+        self.assertIn("never be limited", r["if_limited"])
+        self.assertFalse(r["nothing_stops"])
+
+    def test_a_mail_door_on_a_server_without_mail_says_nothing_would_stop(self):
+        for port in (25, 465, 587):
+            r = self.row(port)
+            self.assertTrue(r["nothing_stops"], port)
+            self.assertEqual(r["if_limited"], ports.NOTHING)
+            self.assertIn("No", r["uses"])
+
+    def test_a_mail_door_names_the_domains_that_would_lose_their_email(self):
+        r = self.row(25, dict(FACTS, mail_domains=["shop.example.com", "blog.example.com"]))
+        self.assertIn("2 domains", r["uses"])
+        self.assertIn("shop.example.com", r["uses"])
+        self.assertIn("could no longer deliver email", r["if_limited"])
+        self.assertFalse(r["nothing_stops"])
+
+    def test_mailboxes_are_counted(self):
+        r = self.row(465, dict(FACTS, mailboxes=3))
+        self.assertIn("3 mailboxes", r["uses"])
+        self.assertFalse(r["nothing_stops"])
+
+    def test_ftp_accounts_are_named_and_sftp_is_said_to_be_unaffected(self):
+        r = self.row(21, dict(FACTS, ftp=["uploader", "editor"]))
+        self.assertIn("2 FTP accounts: uploader, editor", r["uses"])
+        self.assertIn("SFTP", r["if_limited"])
+        self.assertTrue(self.row(21)["nothing_stops"], "no FTP accounts: nobody uses it")
+
+    def test_dns_explains_that_it_only_matters_when_the_name_servers_point_here(self):
+        r = self.row(53, dict(FACTS, dns=["a.example.com", "b.example.com"]))
+        self.assertIn("2 domains", r["uses"])
+        self.assertIn("name servers point to this server", r["uses"])
+        self.assertIn("another company hosts", r["if_limited"])
+
+    def test_what_could_not_be_read_is_never_guessed(self):
+        """Without CyberPanel's database nothing is claimed about mailboxes or accounts: the general sentence is used."""
+        blank = {"websites": [], "mail_domains": None, "mailboxes": None, "ftp": None, "dns": None}
+        for port in (21, 25, 53, 465):
+            r = self.row(port, blank)
+            self.assertFalse(r["nothing_stops"], port)
+            self.assertTrue(r["uses"] and r["if_limited"], port)
+
+    def test_an_unknown_program_says_where_it_comes_from(self):
+        r = self.row(4545, commands={660: "/usr/local/bin/tunnel, service tunnel.service, run by root"})
+        self.assertIn("/usr/local/bin/tunnel", r["uses"])
+        self.assertIn("service tunnel.service", r["uses"])
+        self.assertEqual(len(r["commands"]), 1)
+        self.assertIn("trusted addresses", r["if_limited"])
+        self.assertNotIn("safe", r["if_limited"].lower(), "a tunnel or an app may need outsiders: no promise that limiting it is safe")
+
+    def test_the_advisors_list_does_not_read_the_database(self):
+        calls = self.patch("cpsec.ports.usage_facts", return_value=FACTS)
+        ports.rows()
+        calls.assert_not_called()
+
+    def test_the_page_state_lists_the_trusted_addresses(self):
+        self.patch("cpsec.ports.usage_facts", return_value=FACTS)
+        st = ports.state()
+        self.assertEqual([t["address"] for t in st["trusted_list"]], ["203.0.113.9"])
+        self.assertEqual(st["trusted"], 1)
+
+
+class WhatTheServerReallyDoes(PortsCase):
+    def test_without_cyberpanel_nothing_is_read_from_its_database(self):
+        facts = ports.usage_facts()
+        self.assertEqual([facts["mail_domains"], facts["mailboxes"], facts["ftp"], facts["dns"]], [None, None, None, None])
+        self.assertEqual(self.fake.called("mysql"), [])
+
+    def test_with_cyberpanel_the_answers_are_used(self):
+        import os
+        os.makedirs(config.P.at("/usr/local/CyberCP"))
+        os.makedirs(config.P.home_dir + "/shop.example.com/public_html")
+
+        def mysql(cmd):
+            q = cmd[-1]
+            if "e_domains" in q:
+                return 0, "shop.example.com\n"
+            if "count(*)" in q:
+                return 0, "4\n"
+            if "cyberpanel.users" in q:
+                return 0, "uploader\n"
+            if "cyberpanel.domains" in q:
+                return 0, "a.example.com\nb.example.com\n"
+            return 1, ""
+        self.fake.table.insert(0, (["mysql"], mysql))
+        f = ports.usage_facts()
+        self.assertEqual(f["websites"], ["shop.example.com"])
+        self.assertEqual(f["mail_domains"], ["shop.example.com"])
+        self.assertEqual(f["mailboxes"], 4)
+        self.assertEqual(f["ftp"], ["uploader"])
+        self.assertEqual(f["dns"], ["a.example.com", "b.example.com"])
+
+    def test_a_failed_question_is_unknown_not_empty(self):
+        import os
+        os.makedirs(config.P.at("/usr/local/CyberCP"))
+        self.fake.table.insert(0, (["mysql"], (1, "ERROR 1045 Access denied")))
+        f = ports.usage_facts()
+        self.assertIsNone(f["mail_domains"])
+        self.assertIsNone(f["mailboxes"])
+        self.assertIsNone(f["ftp"])
+
+    def test_a_program_is_described_without_its_arguments(self):
+        """Arguments can hold passwords, so only the program, its folder, its service and its owner are shown."""
+        try:
+            import pwd
+        except ImportError:
+            self.skipTest("needs Linux")
+        from unittest import mock
+        links = {"/proc/7/exe": "/usr/bin/node", "/proc/7/cwd": "/opt/app"}
+        with mock.patch("cpsec.ports.os.readlink", side_effect=lambda p: links[p]), \
+                mock.patch("cpsec.ports.os.stat", return_value=mock.Mock(st_uid=0)), \
+                mock.patch.object(pwd, "getpwuid", return_value=mock.Mock(pw_name="root")), \
+                mock.patch("builtins.open", mock.mock_open(read_data="0::/system.slice/app.service\n")):
+            text = ports.program_info(7)
+        self.assertEqual(text, "/usr/bin/node, started in /opt/app, service app.service, run by root")
+
+    def test_a_program_that_has_gone_is_just_blank(self):
+        self.assertEqual(ports.program_info(999999999), "")

@@ -258,7 +258,7 @@ def check_open_services():
         names = ", ".join("%s (port %d)" % (r["name"], r["port"]) for r in risky)
         out.append(F("open_services", "bad", "A database or internal tool is open to the internet",
                      names + " is listening on all addresses.",
-                     "Lock it on the Open ports page, or make the program listen on 127.0.0.1 only. Websites on "
+                     "Limit it to your trusted addresses on the Open ports page, or make the program listen on 127.0.0.1 only. Websites on "
                      "this server do not need it open from outside.", _page("ports", "Open the Open ports page")))
     odd = [r for r in found if r["level"] == "warn"]
     if odd:

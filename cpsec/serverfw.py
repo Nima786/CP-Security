@@ -336,7 +336,7 @@ def suggestions(cfg=None):
     for item in ports.listening() or []:
         if item["reach"] == "server" or covered("tcp", item["port"]):
             continue
-        name, _kind, _what, _warn = ports._identify(item["port"], item["programs"])
+        name = ports._identify(item["port"], item["programs"])[0]
         offer(name, "tcp", "", item["port"], "In use right now%s" % (" by " + ", ".join(item["programs"]) if item["programs"] else ""))
     for port, names in sorted(_udp_listening().items()):
         if covered("udp", port):
