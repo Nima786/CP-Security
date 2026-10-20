@@ -14,6 +14,10 @@ CyberPanel server and managed from a browser without touching a terminal.
 | **Attack blocker** | fail2ban blocks addresses that keep guessing passwords (SSH, WordPress logins, email, FTP, the panel itself). Trusted addresses and Cloudflare are never blocked. How strict it is can be changed in the panel. |
 | **Web firewall** | The OWASP rules inside the web server. Starts in *watch only* mode (records, never refuses) and can be switched to *blocking* once false alarms are handled. Every change restarts the web server gracefully and is undone automatically if a website stops answering. A built-in test proves the firewall really sees attacks. |
 | **Advisor** | Looks at the whole server and tells you what to do: notices CyberPanel's own ModSecurity rules, Imunify, CSF, other fail2ban jails, Cloudflare-proxied sites, SSH passwords, open databases, missing OS updates, WordPress updates, an expiring certificate. A few safe fixes have a button. |
+| **Open ports** | Every port a program listens on, in plain words, with who can reach it. Lock one to the trusted addresses, open it again, or mark it as known. |
+| **Server firewall** | A firewall that really runs (CyberPanel's Firewall page can say ON when nothing is enforced). A list of ports you edit, with a 2-minute "Keep it" safety net so a wrong list cannot lock you out, and a count of what it turned away in the last hour. |
+| **Security headers** | Small instructions every website sends to browsers (LiteSpeed Enterprise). A safe set is on, the risky ones are off, per website, checked on the live site and undone if a site stops answering. |
+| **WordPress updates** | You see what is waiting on each website and update plugins and themes by hand, one at a time. A copy is saved first, the site is checked afterwards, and the old version is put back if it broke. Nothing ever updates by itself. |
 | **Setup** | A plan you can read first, then one button. Each step undoes itself if something goes wrong, and the whole thing is safe to run again. |
 
 ### It does not fight CyberPanel
@@ -73,7 +77,7 @@ python -m cpsec panel demo        # then open http://127.0.0.1:8765
 
 ## Status
 
-Version 0.2. Tested on **LiteSpeed Enterprise** on Ubuntu 22.04. **OpenLiteSpeed** support follows CyberPanel's
+Version 0.6. Tested on **LiteSpeed Enterprise** on Ubuntu 22.04. **OpenLiteSpeed** support follows CyberPanel's
 own file layout and is covered by tests against pretend file trees, but has **not been run on a live
 OpenLiteSpeed server yet**: the web firewall step checks itself (a test attack must show up in the log, a
 website must still answer) and undoes itself if it does not. See [ROADMAP.md](ROADMAP.md) and

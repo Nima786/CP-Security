@@ -450,6 +450,54 @@ class AdvisorAndSetup(PanelCase):
         self.assertEqual((rows[6379]["level"], rows[6379]["ignored"]), ("info", True))
         self.assertTrue(self.request("POST", "/api/ports/accept", {"port": 6379, "accepted": False})[1]["ok"])
 
+    def test_updates_are_started_by_hand_and_the_list_follows(self):
+        self.request("POST", "/api/updates/refresh", {})
+        self.engine.WP_DEMO_SECONDS = 0.01
+        self.assertEqual(self.request("GET", "/api/wpupdate")[1]["status"], "idle")
+        woo = {"site": "shop.example.com", "kind": "plugin", "slug": "woocommerce"}
+        resp, res = self.request("POST", "/api/wpupdate/start", {"items": [woo]})
+        self.assertEqual((resp.status, res["code"]), (409, "needs_confirm"))
+        for bad in ([], "x", [{"site": "shop.example.com", "kind": "core", "slug": "x"}], [{"site": "nope", "kind": "plugin", "slug": "x"}]):
+            resp, res = self.request("POST", "/api/wpupdate/start", {"items": bad, "confirmed": True})
+            self.assertEqual(resp.status, 400, bad)
+        items = [woo, {"site": "shop.example.com", "kind": "theme", "slug": "bricks"},
+                 {"site": "blog.example.com", "kind": "plugin", "slug": "old-gallery"}]
+        resp, res = self.request("POST", "/api/wpupdate/start", {"items": items, "confirmed": True})
+        self.assertTrue(res["ok"], res)
+        import time as _t
+        _t.sleep(0.15)
+        job = self.request("GET", "/api/wpupdate")[1]
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([i["status"] for i in job["items"]], ["done", "restored", "failed"])
+        self.assertIn("old version", job["items"][1]["message"])
+        self.assertEqual(job["counts"]["done"], 1)
+        left = {(s["site"], i["slug"]) for s in self.request("GET", "/api/updates")[1]["sites"] for i in s["items"]}
+        self.assertNotIn(("shop.example.com", "woocommerce"), left, "an updated item leaves the waiting list")
+        self.assertIn(("shop.example.com", "bricks"), left, "a failed or put-back item is still waiting")
+        self.assertEqual(self.request("POST", "/api/wpupdate/stop", {})[1]["code"], "none")
+        log = self.request("GET", "/api/activity")[1]["events"]
+        self.assertTrue(any(e["event"] == "WP_UPDATE_START" for e in log))
+
+    def test_careful_updates_are_marked_in_the_list(self):
+        self.request("POST", "/api/updates/refresh", {})
+        items = {i["slug"]: i for s in self.request("GET", "/api/updates")[1]["sites"] for i in s["items"]}
+        self.assertTrue(items["woocommerce"]["careful"])
+        self.assertTrue(items["bricks"]["careful"])
+        self.assertFalse(items["wordpress-seo"]["careful"])
+
+    def test_stopping_skips_the_rest(self):
+        self.request("POST", "/api/updates/refresh", {})
+        self.engine.WP_DEMO_SECONDS = 0.2
+        items = [{"site": "shop.example.com", "kind": "plugin", "slug": "woocommerce"}, {"site": "shop.example.com", "kind": "plugin", "slug": "wordpress-seo"},
+                 {"site": "blog.example.com", "kind": "plugin", "slug": "woocommerce"}]
+        self.request("POST", "/api/wpupdate/start", {"items": items, "confirmed": True})
+        self.assertTrue(self.request("POST", "/api/wpupdate/stop", {})[1]["ok"])
+        import time as _t
+        _t.sleep(0.8)
+        job = self.request("GET", "/api/wpupdate")[1]
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([i["status"] for i in job["items"]], ["done", "skipped", "skipped"])
+
     def test_the_server_firewall_page_and_every_button_work(self):
         _, data = self.request("GET", "/api/serverfw")
         self.assertFalse(data["loaded"])
@@ -574,7 +622,7 @@ class AdvisorAndSetup(PanelCase):
                      "/api/ports/accept", "/api/headers/defaults", "/api/headers/check", "/api/headers/apply",
                      "/api/headers/remove", "/api/headers/site", "/api/serverfw/add", "/api/serverfw/remove",
                      "/api/serverfw/power", "/api/serverfw/keep", "/api/serverfw/undo", "/api/serverfw/import",
-                     "/api/serverfw/suggested"):
+                     "/api/serverfw/suggested", "/api/wpupdate/start", "/api/wpupdate/stop"):
             self.assertEqual(self.request("POST", path, {})[0].status, 403, path)
 
 
@@ -592,7 +640,7 @@ class LiveDataRoutes(PanelCase):
         self.login()
 
     def test_every_page_answers_without_an_internal_error(self):
-        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/firewall",
+        paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
                  "/api/updates",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]

@@ -109,3 +109,11 @@ Things that cost hours to discover. They explain several design choices, so they
   list can all be proven that way.
 * Several base chains on the same hook all judge a packet: an accept in one does not skip the others. That is why the
   admin ports must also be allowed in the firewall table, and why the admin lock stays stricter.
+
+## Updating plugins by hand (WP-CLI)
+* `cp -a` keeps the folder's old modified time, so every saved copy of one plugin looks equally old. Clean up old copies by
+  the time stamp in their name, never by `ls -t`. Also match the whole name: `plugin-foo-*` also matches `plugin-foo-bar-*`.
+* Run WP-CLI as the website's own user with `--skip-plugins --skip-themes`, and pick the PHP program that can start the site
+  (`lsphp81` here for old sites, `lsphp83` for new ones): the system `php` is often the wrong version.
+* Proved on a real server with a test site: update, check, simulated "site broke" (the old files went back and the version
+  matched), a name that does not exist, a theme and an active plugin in one run (one database copy per website).

@@ -1,3 +1,4 @@
+import json
 import os
 
 from cpsec import cli, config, provision, serverfw, settings, util
@@ -422,3 +423,70 @@ class FromTheCommandLine(FwCase):
         self.assertIn("ExecStart=/usr/sbin/nft -f /etc/cp-security/firewall.nft", text)
         self.assertIn("ExecStop=-/usr/sbin/nft delete table inet cps_fw", text)
         self.assertIn(util.__name__, "cpsec.util")
+
+
+REFUSED_TCP = json.dumps({"nftables": [{"metainfo": {"version": "1.0.2"}}, {"set": {"family": "inet", "name": "refused_tcp", "table": "cps_fw",
+    "type": "inet_service", "elem": [
+        {"elem": {"val": 4445, "timeout": 3600, "expires": 3500, "counter": {"packets": 12, "bytes": 720}}},
+        {"elem": {"val": 5000, "timeout": 3600, "expires": 3400, "counter": {"packets": 40, "bytes": 2400}}},
+        {"elem": {"val": 23, "timeout": 3600, "expires": 100, "counter": {"packets": 3, "bytes": 180}}}]}}]})
+REFUSED_UDP = json.dumps({"nftables": [{"set": {"family": "inet", "name": "refused_udp", "elem": [
+    {"elem": {"val": 5060, "counter": {"packets": 7, "bytes": 700}}}, 9]}}]})
+
+
+class RefusedPorts(FwCase):
+    def listen(self):
+        self.loaded = True
+        self.fake.table.insert(0, (["nft", "-j", "list", "set", "inet", "cps_fw", "refused_tcp"], (0, REFUSED_TCP)))
+        self.fake.table.insert(0, (["nft", "-j", "list", "set", "inet", "cps_fw", "refused_udp"], (0, REFUSED_UDP)))
+
+    def test_the_busiest_refused_ports_are_listed_with_the_program_that_uses_them(self):
+        self.listen()
+        rows = serverfw.refused()
+        self.assertEqual([(r["proto"], r["port"], r["packets"]) for r in rows],
+                         [("tcp", 5000, 40), ("tcp", 4445, 12), ("udp", 5060, 7), ("tcp", 23, 3), ("udp", 9, 0)],
+                         "an element without a counter is still listed, with 0")
+        self.assertEqual(rows[0]["programs"], ["node"])
+        self.assertEqual(rows[1]["programs"], [])
+        self.assertEqual(serverfw.state()["refused"], rows)
+
+    def test_nothing_is_shown_while_the_firewall_is_off_or_cannot_count(self):
+        self.assertIsNone(serverfw.refused())
+        self.assertIsNone(serverfw.state()["refused"])
+        self.loaded = True
+        self.fake.table.insert(0, (["nft", "-j", "list", "set"], (1, "Error: No such file or directory")))
+        self.assertIsNone(serverfw.refused())
+
+    def test_a_damaged_answer_does_not_crash_the_page(self):
+        self.loaded = True
+        self.fake.table.insert(0, (["nft", "-j", "list", "set"], (0, "not json at all")))
+        self.assertEqual(serverfw.refused(), [])
+
+    def test_the_file_counts_refused_ports_unless_the_firewall_program_is_too_old(self):
+        text = serverfw.build_nft([], [22])
+        self.assertIn("set refused_tcp { type inet_service; flags dynamic,timeout; timeout 1h; size 256; counter; }", text)
+        self.assertIn("tcp flags & (syn | ack) == syn update @refused_tcp { tcp dport timeout 1h }", text)
+        self.assertIn("meta l4proto udp update @refused_udp { udp dport timeout 1h }", text)
+        self.assertLess(text.index("update @refused_tcp"), text.index("counter drop"))
+        plain = serverfw.build_nft([], [22], counting=False)
+        self.assertNotIn("refused", plain)
+
+    def test_if_the_firewall_program_does_not_know_the_counters_the_plain_file_is_used(self):
+        def old_nft(cmd):
+            return (1, "syntax error, unexpected counter") if "refused_tcp" in open(cmd[-1]).read() else (0, "")
+        self.fake.table.insert(0, (["nft", "-c"], old_nft))
+        res = serverfw.turn_on(add_in_use=False)
+        self.assertTrue(res.ok, res.message)
+        self.assertNotIn("refused_tcp", self.read(config.P.fw_nft))
+
+    def test_the_policy_says_what_the_list_allows(self):
+        self.assertIsNone(serverfw.policy(), "no policy while the firewall is off")
+        self.rule("80")
+        self.rule("53", proto="udp")
+        self.loaded = True
+        allowed = serverfw.policy()
+        self.assertTrue(allowed("tcp", 80))
+        self.assertTrue(allowed("tcp", 22), "the server login is always allowed")
+        self.assertTrue(allowed("udp", 53))
+        self.assertFalse(allowed("tcp", 4445))
+        self.assertFalse(allowed("udp", 80))

@@ -116,3 +116,13 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   loads one table (`cps_fw`, hook priority 10, after the admin lock at -1 and the blocker at -1, so the stricter always
   wins). Turning it on is always followed by a 2-minute systemd timer that undoes it unless the owner presses "Keep it";
   it becomes permanent (service enabled) only then.
+* **Updates are manual, one item at a time, and all file work is done as the website's own user.** `wpupdate.py` never
+  runs by itself (no timer, no hook): a person confirms in the panel. Per item: check the website answers, copy the
+  plugin or theme folder and (once per website) the database into `<site home>/cps-backups` (outside the web root,
+  mode 700), update with WP-CLI, ask the website again (fresh address to dodge the page cache, plus the login page, and
+  look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
+  an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
+  the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **Refused-port counts** come from per-port dynamic sets in the firewall table (`refused_tcp`, `refused_udp`, one hour
+  timeout). They restart on a reload. If this nftables rejects the counters, the file is written without them and the
+  firewall still works.

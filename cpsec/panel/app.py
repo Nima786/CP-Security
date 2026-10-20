@@ -141,6 +141,9 @@ class App:
             ("POST", "/api/access/home"): (self.api_access_home, True),
             ("POST", "/api/access/never/add"): (self.api_never_add, True),
             ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/wpupdate"): (self.api_wpupdate, True),
+            ("POST", "/api/wpupdate/start"): (self.api_wpupdate_start, True),
+            ("POST", "/api/wpupdate/stop"): (self.api_wpupdate_stop, True),
             ("GET", "/api/serverfw"): (self.api_serverfw, True),
             ("POST", "/api/serverfw/add"): (self.api_serverfw_add, True),
             ("POST", "/api/serverfw/remove"): (self.api_serverfw_remove, True),
@@ -407,6 +410,24 @@ class App:
         port = _port_number(b.get("port"))
         res = self.engine.ports_accept(port, bool(b.get("accepted", True)))
         activity.write("PORT_ACCEPT" if b.get("accepted", True) else "PORT_UNACCEPT", ip=req.ip, target=str(port), ok=res.ok)
+        return _result(res)
+
+    # ------------------------------------------------------------------ manual updates of plugins and themes
+    def api_wpupdate(self, req, session):
+        return _json(200, self.engine.wpupdate_state())
+
+    def api_wpupdate_start(self, req, session):
+        b = req.json()
+        items = b.get("items")
+        if not b.get("confirmed"):
+            return _json(409, {"ok": False, "code": "needs_confirm", "message": "Please confirm that you want to start these updates."})
+        res = self.engine.wpupdate_start(items)
+        activity.write("WP_UPDATE_START", ip=req.ip, count=len(items) if isinstance(items, list) else 0, ok=res.ok)
+        return _result(res)
+
+    def api_wpupdate_stop(self, req, session):
+        res = self.engine.wpupdate_stop()
+        activity.write("WP_UPDATE_STOP", ip=req.ip, ok=res.ok)
         return _result(res)
 
     # ------------------------------------------------------------------ server firewall

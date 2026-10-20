@@ -13,7 +13,7 @@ Quick commands:     security status            health check
                     security myip 1.2.3.4      my home internet address changed
                     security firewall watch    web firewall: off | watch | block
                     security serverfw          the server firewall: status | on | off | reload | keep | undo
-                    security updates           which sites have updates waiting (only looks)
+                    security updates           which sites have updates waiting (a list; update in the panel)
                     security advice            what to improve, and other security tools found
                     security setup             show the plan and set up what is missing (--yes: no questions)
                     security selftest          prove the web firewall sees attacks

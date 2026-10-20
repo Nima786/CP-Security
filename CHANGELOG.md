@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+* **Update plugins and themes by hand, from the panel (WP Updates page).** Nothing ever updates by itself: a person picks
+  an item and confirms. One item at a time, in the background, with a progress card. For each one: the website must
+  answer normally first (otherwise nothing is touched); a copy of the plugin or theme folder is saved in the website's
+  own `cps-backups` folder, and once per website a copy of its database; WP-CLI does the update as the website's own
+  user (never root); the home page (with a fresh address, so the cache cannot answer) and the login page are asked
+  again; if the site stops answering or shows a PHP crash, the saved copy is put back and the site is checked again.
+  The cache is cleared after a good update. The last 3 copies are kept. If an update fails, the message says why and
+  links to the website's own update page for a manual update. Plugins such as shops, payments and page builders are
+  marked "careful". There is deliberately no "update everything everywhere" button and no WordPress core update.
+  Limits, said plainly in the panel: putting the old files back cannot undo changes an update made to the database
+  (that is what the database copy is for), and plugins that need a licence may have to be updated by hand.
+* **"Refused in the last hour"** on the Server firewall page: which ports the firewall turned visitors away from, how
+  often, and an "Allow this port" button. Counts restart when the firewall is reloaded.
+* **Open ports is firewall-aware.** A port the server firewall refuses now says so ("Refused by the server firewall")
+  instead of looking open, and one that is allowed says it is allowed by the firewall's list.
+* The Advisor, the terminal menu and the command-line help no longer say the panel "never installs": they say that
+  updating is done one item at a time in the panel.
+
 ## 0.5.0
 * **Server firewall** (new page). On servers where CyberPanel's firewall program (firewalld) is not installed, CyberPanel's
   Firewall page still shows "ON" and keeps a list of rules, but nothing is enforced: its ON light only turns OFF when the

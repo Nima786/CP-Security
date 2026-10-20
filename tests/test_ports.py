@@ -1,4 +1,4 @@
-from cpsec import access, advisor, config, ports, settings, util
+from cpsec import access, advisor, config, ports, serverfw, settings, util
 from tests.helpers import EnvTestCase
 
 SS = (
@@ -247,3 +247,33 @@ class Advisor(PortsCase):
             ports.unlock(p, confirmed=True)
         f = advisor.check_lock()[0]
         self.assertEqual((f["id"], f["level"]), ("lock", "info"))
+
+
+class WithTheServerFirewall(PortsCase):
+    def switch_on(self, *allowed):
+        for p in allowed:
+            self.assertTrue(serverfw.add_rule("x", "tcp", "", str(p)).ok)
+        self.fake.table.insert(0, (["nft", "list", "table", "inet", "cps_fw"], (0, "table inet cps_fw { counter drop }")))
+
+    def test_a_port_the_firewall_does_not_list_shows_as_refused_not_as_open(self):
+        self.switch_on(80)
+        rows = ports.rows()
+        row = by_port(rows, 5000)
+        self.assertEqual((row["status"], row["level"], row["can_lock"]), ("refused", "ok", False))
+        self.assertIn("server firewall", row["status_text"])
+        self.assertEqual((by_port(rows, 6379)["status"], by_port(rows, 6379)["level"]), ("refused", "ok"), "a cache the firewall refuses is no longer a danger")
+
+    def test_a_port_on_the_firewalls_list_stays_open_and_says_why(self):
+        self.switch_on(5000)
+        row = by_port(ports.rows(), 5000)
+        self.assertEqual((row["status"], row["level"]), ("open", "warn"))
+        self.assertIn("Allowed by the server firewall's list", row["status_text"])
+
+    def test_locked_and_server_only_ports_are_unchanged(self):
+        self.switch_on()
+        rows = ports.rows()
+        self.assertEqual(by_port(rows, 8090)["status"], "locked")
+        self.assertEqual(by_port(rows, 3306)["status"], "closed")
+
+    def test_without_the_firewall_nothing_changes(self):
+        self.assertEqual(by_port(ports.rows(), 5000)["status"], "open")

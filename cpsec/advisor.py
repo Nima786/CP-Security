@@ -405,7 +405,7 @@ def check_wordpress_updates():
         return [F("wp_updates", "warn", "%d update%s waiting on %d website%s"
                   % (count, "" if count == 1 else "s", sites_n, "" if sites_n == 1 else "s"),
                   "Out-of-date plugins are how most WordPress sites get hacked.",
-                  "Update them, after a backup. This panel only looks, it never installs.",
+                  "Update them one at a time on the WordPress updates page: a copy is saved first and nothing updates by itself.",
                   _page("updates", "See the list"))]
     return [F("wp_updates", "ok", "Everything checked is up to date", "Last look: %s." % cache.get("finished", ""), "")]
 

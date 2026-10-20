@@ -11,7 +11,7 @@ import threading
 import time
 
 from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, ports, provision,
-                selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver)
+                selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
 BUSY = Result(False, "Setup is running right now. Try again when it has finished.", "busy")
@@ -390,6 +390,40 @@ class LiveEngine:
             self._changed()
             return waf.remove_exception(index)
 
+    # ------------------------------------------------------------------ manual updates of plugins and themes
+    def wpupdate_state(self):
+        return wpupdate.state()
+
+    def wpupdate_start(self, items):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._job_lock:
+            titles = {(s["site"], i["kind"], i.get("slug", "")): i["what"] for s in self._updates.get("sites", []) for i in s.get("items", [])}
+        return wpupdate.start(items, titles, on_item=self._wpupdate_logged, on_done=self._wpupdate_done)
+
+    def wpupdate_stop(self):
+        return wpupdate.stop()
+
+    def _wpupdate_logged(self, item):
+        from . import activity
+        activity.write("WP_UPDATE", site=item["site"], kind=item["kind"], slug=item["slug"], status=item["status"])
+
+    def _wpupdate_done(self, touched):
+        """Look at the websites again so the list shows what is still waiting."""
+        for name in touched:
+            entry = updates.look_one(name)
+            if entry is None:
+                continue
+            with self._job_lock:
+                sites_list = [s for s in self._updates.get("sites", []) if s["site"] != name] + [entry]
+                self._updates = dict(self._updates, sites=sorted(sites_list, key=lambda s: s["site"]))
+                state = self._updates
+            try:
+                util.write_json(config.P.updates_cache, state)
+            except OSError:
+                pass
+
     # ------------------------------------------------------------------ updates (read-only, slow: runs in the background)
     def updates_state(self):
         with self._job_lock:
@@ -467,6 +501,7 @@ class DemoEngine:
         self.never = [{"address": "104.16.0.0/13", "label": "Cloudflare"}, {"address": "172.64.0.0/13", "label": "Cloudflare"}]
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
         self.fw_enabled, self.fw_rules, self.fw_next, self.fw_pending_until, self.fw_previous = False, [], 1, 0.0, None
+        self.wp_job = None
         self.h_cfg = {"defaults": dict(headers.DEFAULTS), "sites": {}}
         self.h_sites = {d: {"own": list(own), "taken": [], "block": "", "error": err} for d, own, err in (
             ("blog.example.com", [], ""), ("example.org", [], ""), ("old.example.com", [],
@@ -508,7 +543,7 @@ class DemoEngine:
               {"kind": "action", "id": "add_cloudflare", "label": "Add Cloudflare to the never-block list"}),
             f("wp_updates", "warn", "3 updates waiting on 2 websites",
               "Out-of-date plugins are how most WordPress sites get hacked.",
-              "Update them, after a backup. This panel only looks, it never installs.",
+              "Update them one at a time on the WordPress updates page: a copy is saved first and nothing updates by itself.",
               {"kind": "page", "id": "updates", "label": "See the list"}),
             f("ssh", "info", "Server logins (SSH) accept passwords",
               "The attack blocker limits guessing, but passwords can still be tried.",
@@ -799,7 +834,10 @@ class DemoEngine:
                                         "The rules on that page are only a list: nothing is enforced."},
                  "ours": {"enabled": self.fw_enabled, "loaded": self.fw_enabled}, "others": []}
         rules = [dict(r, in_use=r["port"] in ("80", "443", "5000"), used_by=[], text=serverfw.describe(r)) for r in self.fw_rules]
-        return {"truth": truth, "enabled": self.fw_enabled, "loaded": self.fw_enabled, "rules": rules,
+        refused = [{"proto": "tcp", "port": 23, "packets": 240, "programs": []}, {"proto": "tcp", "port": 4445, "packets": 12, "programs": []},
+                   {"proto": "udp", "port": 5060, "packets": 31, "programs": []}] if self.fw_enabled else None
+        refused = [r for r in refused if not any(x["proto"] == r["proto"] and x["port"] == str(r["port"]) for x in rules)] if refused is not None else None
+        return {"truth": truth, "enabled": self.fw_enabled, "loaded": self.fw_enabled, "rules": rules, "refused": refused,
                 "builtin": [
                     {"name": "Replies to connections the server started", "what": "Updates, mail it sends, anything the server asks for.", "port": ""},
                     {"name": "The server talking to itself", "what": "Websites, databases and caches reach each other inside the server.", "port": ""},
@@ -1005,12 +1043,69 @@ class DemoEngine:
         self.exceptions.pop(index)
         return Result(True, "Exception removed.")
 
+    # ------------------------------------------------------------------ manual updates (made-up)
+    WP_DEMO_SECONDS = 1.2
+
+    def wpupdate_start(self, items):
+        if self.wp_job and not self.wp_job.get("finished"):
+            return Result(False, "Updates are already running. Wait for them to finish.", "busy")
+        if not isinstance(items, list) or not items:
+            return Result(False, "Choose what to update.", "invalid")
+        known = {(s["site"], i["kind"], i.get("slug", "")): i for s in self.updates["sites"] for i in s["items"]}
+        rows = []
+        for it in items:
+            key = (it.get("site"), it.get("kind"), it.get("slug"))
+            if key not in known or it.get("kind") not in ("plugin", "theme"):
+                return Result(False, "That is not something that is waiting for an update.", "invalid")
+            rows.append(dict(site=key[0], kind=key[1], slug=key[2], title=known[key]["what"], status="waiting", message="",
+                             **{"from": known[key]["from"], "to": known[key]["to"]}))
+        self.wp_job = {"items": rows, "started": time.time(), "stop": False, "stop_at": None, "finished": ""}
+        return Result(True, "Started: %d update%s." % (len(rows), "" if len(rows) == 1 else "s"))
+
+    def wpupdate_stop(self):
+        if not self.wp_job or self.wp_job.get("finished"):
+            return Result(False, "Nothing is running.", "none")
+        self.wp_job["stop_at"] = time.time() - self.wp_job["started"]
+        return Result(True, "It stops after the update that is running now. The rest are skipped.")
+
+    def wpupdate_state(self):
+        job = self.wp_job
+        if not job:
+            return {"status": "idle", "items": [], "started": "", "finished": "", "stop": False,
+                    "counts": {k: 0 for k in ("waiting", "working", "done", "failed", "restored", "skipped")}}
+        elapsed = time.time() - job["started"]
+        for n, it in enumerate(job["items"]):
+            if it["status"] in ("done", "failed", "restored", "skipped"):
+                continue
+            if job["stop_at"] is not None and n * self.WP_DEMO_SECONDS >= job["stop_at"]:
+                it.update(status="skipped", message="Skipped, because you stopped the updates.")
+            elif elapsed >= (n + 1) * self.WP_DEMO_SECONDS:
+                if it["slug"] == "bricks":
+                    it.update(status="restored", message="After the update the home page now answers 500, so the old version %s was put back." % it["from"], to=it["from"])
+                elif it["slug"] == "old-gallery":
+                    it.update(status="failed", message="The update failed (Download failed. Invalid license). The website stays on version %s." % it["from"])
+                else:
+                    it.update(status="done", message="Updated from %s to %s. The website still answers normally." % (it["from"], it["to"]))
+            elif elapsed >= n * self.WP_DEMO_SECONDS:
+                it.update(status="working", message="Updating…")
+        if all(i["status"] in ("done", "failed", "restored", "skipped") for i in job["items"]) and not job["finished"]:
+            job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            done = {(i["site"], i["kind"], i["slug"]) for i in job["items"] if i["status"] == "done"}
+            for s in self.updates["sites"]:
+                s["items"] = [i for i in s["items"] if (s["site"], i["kind"], i.get("slug", "")) not in done]
+        out = copy.deepcopy(job)
+        out["stop"] = job["stop_at"] is not None
+        out["status"] = "done" if job["finished"] else "running"
+        out["counts"] = {k: sum(1 for i in out["items"] if i["status"] == k) for k in ("waiting", "working", "done", "failed", "restored", "skipped")}
+        return out
+
     def updates_state(self):
         return copy.deepcopy(self.updates)
 
     def updates_refresh(self):
         def item(what, slug, kind, now, to, status="active"):
-            return {"what": what, "slug": slug, "from": now, "to": to, "kind": kind, "status": status}
+            return {"what": what, "slug": slug, "from": now, "to": to, "kind": kind, "status": status,
+                    "careful": updates.is_careful(slug, what)}
         self.updates = {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S"), "sites": [
             {"site": "shop.example.com", "checked": True, "items": [
                 item("WooCommerce", "woocommerce", "plugin", "10.0.4", "11.2.1"),

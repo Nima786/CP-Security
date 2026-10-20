@@ -12,7 +12,7 @@ printing, so a terminal menu and a browser panel can share it.
 - ✅ Attack blocker views (who is blocked, let someone back in, history)
 - ✅ Web firewall (modes, exceptions, what it recorded, automatic undo)
 - ✅ Sites check with a saved baseline (new problems vs. old ones)
-- ✅ Updates waiting (read-only)
+- ✅ Updates waiting (the list is read-only; updating plugins and themes by hand came in M7)
 - ✅ OWASP rule converter (the LiteSpeed engine only runs the first rule file unless the stricter levels are cut out)
 - ✅ Terminal menu (`security`)
 
@@ -57,6 +57,12 @@ Rule for everything here: explained in plain words, shown on a page, and the own
 - ✅ Server firewall: tells the truth about CyberPanel's Firewall page, and a firewall that really works (list of ports, TCP/UDP, addresses; on, off, reload; a 2-minute "Keep it" safety net)
 - ✅ Security headers (LiteSpeed Enterprise): a safe set on by default, the risky ones off; per website; takes over a site's own
   header lines only on request and gives them back on removal; checks the live answer and undoes the change if a website stops answering
+- ✅ Manual plugin and theme updates: one item at a time, started by a person (never automatic). The website must answer first; a copy of the
+  folder and, once per website, of the database are saved; WP-CLI updates it as the website's own user; the website is asked again and the
+  old copy goes back if it does not answer or shows a PHP crash. Limits: a database change made by an update is not undone by putting files
+  back, licensed plugins may need a manual update, and WordPress core is not updated from here
+- ✅ "Refused in the last hour" on the Server firewall page (which ports the firewall turned away, with an "Allow this port" button);
+  the Open ports page now says when the server firewall is what refuses a port
 - ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)
 - ⬜ Block PHP in uploads folders and hide backups, logs and other sensitive files (per website, with a self-test)
 - ⬜ Daily scan for backdoors and changed WordPress files

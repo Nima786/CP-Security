@@ -176,7 +176,8 @@ def menu_recent_blocks():
 
 def menu_updates():
     heading("WEBSITES WITH UPDATES WAITING")
-    print("This only LOOKS. It never installs anything.")
+    print("This only LOOKS. To update a plugin or theme, use the panel (one at a time, with a copy saved first).")
+    print("Nothing on this server ever updates by itself.")
     print("It shows what each site last found out about, so a very new update may not be listed yet.\n")
     data = updates.waiting()
     waiting = 0
@@ -407,7 +408,7 @@ def main_menu():
         print(" 1) Health check - is everything on, and are the websites up?")
         print(" 2) Blocked addresses - see who is blocked, let someone back in")
         print(" 3) Admin access - my home internet address changed")
-        print(" 4) Websites with updates waiting (only looks, installs nothing)")
+        print(" 4) Websites with updates waiting (the list; update them in the panel)")
         print(" 5) What has been blocked lately")
         print(" 6) Web firewall (watches for hacking attempts)")
         print(" 7) Something is wrong - what do I do?")

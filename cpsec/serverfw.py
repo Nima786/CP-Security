@@ -153,17 +153,23 @@ def _addr_match(address):
     return ("ip6 saddr %s " if ":" in address else "ip saddr %s ") % address
 
 
-def build_nft(rules, always, table=TABLE, test_source=None):
+def build_nft(rules, always, table=TABLE, test_source=None, counting=True):
     """The whole firewall as one nft file. Reloading it replaces the old table in one step.
 
     test_source: for tests on a live server only. If given, the table only judges packets from that one address
-    (everything else is accepted at once) and does not trust the loopback, so the real traffic is never touched."""
+    (everything else is accepted at once) and does not trust the loopback, so the real traffic is never touched.
+    counting: also remember which ports were refused (per port, for an hour) so the page can show them."""
     lines = [
         "#!/usr/sbin/nft -f",
         "# Written by CP-Security. Change it on the Server firewall page, not by hand.",
         "add table inet %s" % table,
         "flush table inet %s" % table,
         "table inet %s {" % table,
+    ]
+    if counting:
+        lines += ["    set refused_tcp { type inet_service; flags dynamic,timeout; timeout 1h; size 256; counter; }",
+                  "    set refused_udp { type inet_service; flags dynamic,timeout; timeout 1h; size 256; counter; }"]
+    lines += [
         "    chain input {",
         "        type filter hook input priority 10; policy accept;",
     ]
@@ -185,6 +191,9 @@ def build_nft(rules, always, table=TABLE, test_source=None):
         lines.append('        tcp dport { %s } accept comment "always open"' % ", ".join(str(p) for p in always))
     for r in rules:
         lines.append("        %s%s dport %s accept comment \"%s\"" % (_addr_match(r["address"]), r["proto"], r["port"], r["name"]))
+    if counting:
+        lines += ["        tcp flags & (syn | ack) == syn update @refused_tcp { tcp dport timeout 1h }",
+                  "        meta l4proto udp update @refused_udp { udp dport timeout 1h }"]
     lines += ["        counter drop", "    }", "}", ""]
     return "\n".join(lines)
 
@@ -387,10 +396,12 @@ def import_cyberpanel():
 
 # ----------------------------------------------------------------------------- loading it
 def _write_and_check(cfg):
-    text = build_nft(cfg["rules"], always_open_ports())
     tmp = config.P.fw_nft + ".new"
-    util.atomic_write(tmp, text)
-    rc, out = util.run(["nft", "-c", "-f", tmp])
+    for counting in (True, False):               # an older firewall program may not know the per-port counters
+        util.atomic_write(tmp, build_nft(cfg["rules"], always_open_ports(), counting=counting))
+        rc, out = util.run(["nft", "-c", "-f", tmp])
+        if rc == 0:
+            break
     if rc != 0:
         os.remove(tmp)
         return Result(False, "The firewall program did not accept the list: " + out.strip()[:200], "nft_rejected")
@@ -436,6 +447,47 @@ def _stop_undo_timer():
     util.run(["systemctl", "reset-failed", REVERT_UNIT + ".service"])
 
 
+def refused(limit=15):
+    """Ports the firewall refused during the last hour, busiest first, as
+    [{'proto', 'port', 'packets', 'programs'}]. None when the firewall is off or cannot count."""
+    if not is_loaded():
+        return None
+    counts, answered = {}, False
+    for proto in ("tcp", "udp"):
+        rc, out = util.run(["nft", "-j", "list", "set", "inet", TABLE, "refused_" + proto])
+        if rc != 0:
+            continue
+        answered = True
+        try:
+            data = json.loads(out)
+        except ValueError:
+            continue
+        for item in data.get("nftables", []) if isinstance(data, dict) else []:
+            for elem in (item.get("set") or {}).get("elem", []):
+                el = elem.get("elem") if isinstance(elem, dict) and "elem" in elem else elem
+                val = el.get("val") if isinstance(el, dict) else el
+                packets = ((el.get("counter") or {}).get("packets", 0)) if isinstance(el, dict) else 0
+                if isinstance(val, int) and not isinstance(val, bool):
+                    counts[(proto, val)] = counts.get((proto, val), 0) + int(packets or 0)
+    if not answered:
+        return None
+    tcp_programs = {r["port"]: r["programs"] for r in ports.listening() or []}
+    udp_programs = _udp_listening()
+    rows = [{"proto": proto, "port": port, "packets": n,
+             "programs": (tcp_programs if proto == "tcp" else udp_programs).get(port, [])}
+            for (proto, port), n in counts.items()]
+    rows.sort(key=lambda r: (-r["packets"], r["port"]))
+    return rows[:limit]
+
+
+def policy():
+    """A function (proto, port) -> is it allowed through? None when the firewall is not loaded."""
+    if not is_loaded():
+        return None
+    always, rules = set(always_open_ports()), load()["rules"]
+    return lambda proto, port: (proto == "tcp" and port in always) or any(covers(r, proto, port) for r in rules)
+
+
 # ----------------------------------------------------------------------------- state for the page
 def _listening_public():
     return [r for r in (ports.listening() or []) if r["reach"] != "server"]
@@ -456,7 +508,7 @@ def state():
         users = sorted({name for p, item in live_ports.items() if r["proto"] == "tcp" and lo <= p <= hi for name in item["programs"]})
         rows.append(dict(r, in_use=bool(users), used_by=users, text=describe(r)))
     return {
-        "truth": t, "enabled": cfg["enabled"], "loaded": t["ours"]["loaded"],
+        "truth": t, "enabled": cfg["enabled"], "loaded": t["ours"]["loaded"], "refused": refused(),
         "rules": rows, "builtin": builtin_rows(), "suggestions": suggestions(cfg),
         "cyberpanel_rules": t["cyberpanel"]["rules_listed"],
         "pending": None if not pending else {"seconds_left": max(0, int(pending["until"] - _now())), "action": pending["action"]},

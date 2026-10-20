@@ -196,7 +196,7 @@ def _panel_port():
     return p if settings.valid_port(p) else None
 
 
-def _row(port, reach, programs, choices, locked_set):
+def _row(port, reach, programs, choices, locked_set, policy=None):
     name, kind, what, warn = _identify(port, programs)
     panel = _panel_port()
     if panel == port:
@@ -222,12 +222,16 @@ def _row(port, reach, programs, choices, locked_set):
         status, status_text = "closed", "Only this server itself can reach it."
     elif in_lock:
         status, status_text = "locked", "Only your trusted addresses can reach it."
+    elif policy is not None and not policy("tcp", port):
+        status, status_text = "refused", "Refused by the server firewall: it is not on the firewall's list."
     elif reach == "private":
         status, status_text = "private", "Only reachable inside your provider's private network."
     else:
         status, status_text = "open", "Anybody on the internet can try to reach it."
 
     level, advice = "ok", ""
+    if status == "open" and policy is not None:
+        status_text = "Allowed by the server firewall's list: anybody on the internet can try to reach it."
     if status == "open":
         if kind in ("web", "service"):
             level = "ok"
@@ -276,11 +280,13 @@ def rows():
         return None
     choices = settings.port_choices()
     locked_set = set(settings.lock_ports())
+    from . import serverfw                      # late: serverfw uses this module too
+    policy = serverfw.policy()                  # None while the server firewall is off
     seen = set()
     out = []
     for item in live:
         seen.add(item["port"])
-        out.append(_row(item["port"], item["reach"], item["programs"], choices, locked_set))
+        out.append(_row(item["port"], item["reach"], item["programs"], choices, locked_set, policy))
     # a port the owner chose to lock or open must stay on the page even while its program is stopped
     for port in sorted(set(choices["locked"]) | set(choices["opened"])):
         if port not in seen:

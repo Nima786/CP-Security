@@ -484,7 +484,7 @@
 
   // ------------------------------------------------------------------ open ports
   const PORT_STATUS = {
-    open: ['Open to everyone', 'warn'], locked: ['Trusted addresses only', 'ok'], closed: ['This server only', 'ok'],
+    open: ['Open to everyone', 'warn'], refused: ['Refused by the server firewall', 'ok'], locked: ['Trusted addresses only', 'ok'], closed: ['This server only', 'ok'],
     private: ['Private network only', 'ok'], idle: ['Nothing running', ''],
   };
 
@@ -628,6 +628,22 @@
         h('td', {}, s.name, s.address ? h('div', { class: 'muted small', text: 'only from ' + s.address }) : null),
         h('td', { class: 'muted small', text: s.why }))), ''),
       h('div', { class: 'card-foot muted small', text: 'When the firewall is on, anything that is not on the list is refused. Add what you use.' })) : null;
+    const allow = async r => {
+      if (!await confirmBox('Open ' + r.proto.toUpperCase() + ' ' + r.port + ' to everybody?', 'Anybody on the internet will be able to reach it. Only do this for something of yours that you know.', 'Open it')) return;
+      await run('/api/serverfw/add', { name: 'Allowed from the refused list', proto: r.proto, address: '', port: String(r.port) }, 'Adding…');
+    };
+    const refusedCard = data.loaded ? (data.refused === null
+      ? h('div', { class: 'note', text: 'This server\u2019s firewall program cannot count the ports it refuses.' })
+      : h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: 'Refused in the last hour' }), badge(String(data.refused.length), data.refused.length ? 'warn' : 'ok'),
+          h('span', { class: 'muted small right', text: 'The counts start again when you change the list.' })),
+        data.refused.length ? table(['Port', 'Tried', 'Program', ''], data.refused.map(r => h('tr', {},
+          h('td', {}, h('span', { class: 'mono', text: r.port }), ' ', badge(r.proto.toUpperCase(), '')),
+          h('td', { text: r.packets + (r.proto === 'tcp' ? (r.packets === 1 ? ' attempt' : ' attempts') : (r.packets === 1 ? ' packet' : ' packets')) }),
+          h('td', { class: 'small', text: r.programs.length ? r.programs.join(', ') : 'nothing is listening' }),
+          h('td', { class: 'actions' }, h('button', { class: 'btn small', type: 'button', text: 'Allow this port', onclick: () => allow(r) })))), '')
+          : h('div', { class: 'empty', text: 'Nothing was refused in the last hour.' }),
+        h('div', { class: 'card-foot muted small', text: 'If something of yours is on this list, it is not reaching the server: allow its port. If you do not know it, leave it closed. The internet is full of scanners knocking on doors.' }))) : null;
     const copyCard = data.cyberpanel_rules ? h('section', { class: 'card' },
       h('h2', { text: 'Start from CyberPanel\u2019s list' }),
       h('p', { class: 'muted', text: 'CyberPanel keeps a list of ' + data.cyberpanel_rules + ' rules. You can copy it here once, so you do not have to type it again. The server login and the admin pages are skipped: they are always open.' }),
@@ -663,7 +679,7 @@
       table(small ? ['Name', 'Open to', 'Port'] : ['Name', 'Open to', 'Port', ''], ruleRows.concat(always), ''),
       h('div', { class: 'card-foot' }, form));
 
-    return h('div', { class: 'stack' }, head, status, waiting, sugCard, copyCard, list,
+    return h('div', { class: 'stack' }, head, status, waiting, refusedCard, sugCard, copyCard, list,
       h('p', { class: 'muted small', text: 'Only incoming traffic is judged: what the server starts itself is never blocked. Ports published by Docker are not covered. TCP and UDP are separate, like on CyberPanel\u2019s page.' }));
   }
 
@@ -899,8 +915,39 @@
   // ------------------------------------------------------------------ WP updates (WordPress, plugins, themes)
   const KIND = { plugin: ['Plugin', 'brand'], theme: ['Theme', 'warn'] };
   const kindBadge = k => k.startsWith('core') ? badge('WordPress', 'bad') : badge(KIND[k][0], KIND[k][1]);
+  const JOB_STATUS = { waiting: ['waiting', ''], working: ['working…', 'brand'], done: ['updated', 'ok'], failed: ['failed', 'bad'], restored: ['old version put back', 'warn'], skipped: ['skipped', ''] };
 
-  function renderUpdates(state) {
+  // the progress of the updates you started (nothing here runs by itself)
+  function renderJob(job, stop) {
+    if (!job || job.status === 'idle' || !job.items.length) return null;
+    const running = job.status === 'running';
+    const c = job.counts;
+    const finished = c.done + c.failed + c.restored + c.skipped;
+    const rows = job.items.map(i => {
+      const [label, kind] = JOB_STATUS[i.status] || [i.status, ''];
+      const manual = i.status === 'failed' || i.status === 'restored';
+      return h('tr', {},
+        h('td', { class: 'mono', text: i.site }),
+        h('td', {}, kindBadge(i.kind), ' ', i.title),
+        h('td', { class: 'mono', text: (i.from || '–') + (i.to && i.to !== i.from ? ' \u2192 ' + i.to : '') }),
+        h('td', {}, badge(label, kind), i.message ? h('div', { class: 'small ' + (manual ? '' : 'muted'), text: i.message }) : null,
+          manual ? h('a', { class: 'small', href: 'https://' + i.site + '/wp-admin/update-core.php', target: '_blank', rel: 'noopener', text: 'Update it by hand in WordPress' }) : null));
+    });
+    return h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' },
+        running ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
+        h('h2', { text: running ? 'Updating… ' + finished + ' of ' + job.items.length : 'Updates finished' }),
+        c.done ? badge(c.done + ' updated', 'ok') : null, c.restored ? badge(c.restored + ' put back', 'warn') : null,
+        c.failed ? badge(c.failed + ' failed', 'bad') : null, c.skipped ? badge(c.skipped + ' skipped', '') : null,
+        running ? h('button', { class: 'btn small right', type: 'button', text: job.stop ? 'Stopping…' : 'Stop after this one', disabled: !!job.stop, onclick: stop }) : null),
+      table(['Website', 'What', 'Version', 'Result'], rows, ''),
+      h('div', { class: 'card-foot muted small', text: running
+        ? 'Each update saves a copy first, then checks the website. If the website stops working, the old version goes back by itself. You can leave this page: it keeps going.'
+        : 'A website that failed stays on its old version and still works. A copy of every changed plugin and theme, and of the database, is kept in a folder next to the website (the last 3).' }));
+  }
+
+  function renderUpdates(state, ctl) {
+    ctl = ctl || { busy: false, update: () => {} };
     const sites = state.sites || [];
     const withItems = sites.filter(s => s.items.length);
     const unchecked = sites.filter(s => !s.checked);
@@ -911,13 +958,14 @@
     const all = withItems.flatMap(s => s.items.map(i => Object.assign({ site: s.site }, i)));
     const count = test => all.filter(test).length;
     const plugins = count(i => i.kind === 'plugin'), themes = count(i => i.kind === 'theme'), core = count(i => i.kind.startsWith('core'));
-    // the same plugin or theme waiting on several websites: update them together
+    // the same plugin or theme waiting on several websites
     const groups = {};
     all.forEach(i => {
       const key = i.kind + ':' + (i.slug || i.what);
       (groups[key] = groups[key] || { kind: i.kind, what: i.what, to: i.to, sites: [] }).sites.push(i.site);
     });
     const shared = Object.values(groups).filter(g => g.sites.length > 1).sort((a, b) => b.sites.length - a.sites.length);
+    const updatable = i => (i.kind === 'plugin' || i.kind === 'theme') && i.slug;
 
     return h('div', { class: 'stack' },
       h('div', { class: 'banner ' + (withItems.length ? 'warn' : 'ok') }, icon(withItems.length ? 'alert' : 'check'),
@@ -925,46 +973,89 @@
           h('div', { class: 'sub', text: 'Looked ' + state.finished }))),
       withItems.length ? h('div', { class: 'grid tiles' }, tile('Websites affected', withItems.length), tile('Plugins', plugins), tile('Themes', themes), tile('WordPress itself', core)) : null,
       shared.length ? h('section', { class: 'card flush' },
-        h('div', { class: 'card-head' }, h('h2', { text: 'The same update on several websites' }), h('span', { class: 'muted small right', text: 'Update these together.' })),
+        h('div', { class: 'card-head' }, h('h2', { text: 'The same update on several websites' }), h('span', { class: 'muted small right', text: 'Update these one website at a time below.' })),
         table(['What', 'Type', 'New version', 'Websites'], shared.map(g => h('tr', {}, h('td', { text: g.what }), h('td', {}, kindBadge(g.kind)),
           h('td', { class: 'mono', text: g.to }), h('td', { class: 'small', text: g.sites.length + ': ' + g.sites.sort().join(', ') }))), '')) : null,
-      withItems.map(s => h('section', { class: 'card flush' },
-        h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn')),
-        table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', {},
-          h('td', {}, kindBadge(i.kind)), h('td', { text: i.what }), h('td', { class: 'mono', text: i.from || '–' }),
-          h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null),
-          h('td', {}, i.status === 'inactive' ? badge('switched off', '') : null))), ''))),
+      withItems.map(s => {
+        const mine = s.items.filter(updatable).map(i => Object.assign({ site: s.site }, i));
+        return h('section', { class: 'card flush' },
+          h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
+            mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, text: 'Update all ' + mine.length + ' on this website\u2026', onclick: () => ctl.update(mine) }) : null),
+          table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', {},
+            h('td', {}, kindBadge(i.kind)),
+            h('td', {}, i.what, i.careful ? [' ', badge('careful', 'warn')] : null),
+            h('td', { class: 'mono', text: i.from || '\u2013' }),
+            h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null),
+            h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ',
+              updatable(i) ? h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) }) : null))), ''));
+      }),
       unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null);
   }
 
   async function viewUpdates() {
     let state = (await api('/api/updates')).data;
-    const holder = h('div', {}, renderUpdates(state));
+    let job = (await api('/api/wpupdate')).data;
+    const holder = h('div', {}, null);
+    const jobHolder = h('div', {}, null);
     const button = h('button', { class: 'btn primary', type: 'button', text: 'Look for updates' });
+
+    const stopJob = async () => { await act('/api/wpupdate/stop', {}); await showJob(); };
+    const paint = () => {
+      jobHolder.replaceChildren(renderJob(job, stopJob) || '');
+      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running', update: askUpdate }));
+    };
+    // the progress is looked at every 2 seconds while updates run, and the list is read again when they finish
+    const watch = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'updates') { clearInterval(S.pollTimer); return; }
+        const was = job.status;
+        job = (await api('/api/wpupdate')).data;
+        if (was === 'running' && job.status !== 'running') {
+          state = (await api('/api/updates')).data;
+          clearInterval(S.pollTimer);
+          toast(job.counts.failed + job.counts.restored ? 'Updates finished. Some need a look.' : 'Updates finished.', job.counts.failed + job.counts.restored ? 'bad' : 'ok');
+        }
+        paint();
+      }, 2000);
+    };
+    async function showJob() { job = (await api('/api/wpupdate')).data; paint(); }
+    async function askUpdate(items) {
+      const careful = items.filter(i => i.careful);
+      const content = h('div', {},
+        h('p', { text: 'These will be updated now, one after the other:' }),
+        h('ul', { class: 'plain' }, items.map(i => h('li', {}, h('span', { class: 'mono', text: i.site }), ' \u2013 ' + i.what + ' ', h('span', { class: 'mono muted', text: i.from + ' \u2192 ' + i.to })))),
+        careful.length ? h('p', { class: 'error', style: 'min-height:0', text: 'Careful: ' + careful.map(i => i.what).join(', ') + ' can change how a shop or a page looks and works. If you have a test copy of this website, update that one first.' }) : null,
+        h('p', { class: 'muted small', text: 'Before each update a copy of the files is saved, and once per website a copy of the database. Afterwards the website is checked. If it does not work, the old version is put back and you are told. Putting files back cannot undo changes an update made to the database; that is what the database copy is for.' }));
+      if (!await dialog({ title: 'Update ' + items.length + ' item' + (items.length > 1 ? 's' : '') + '?', content, ok: 'Start updating' })) return;
+      const r = await act('/api/wpupdate/start', { items: items.map(i => ({ site: i.site, kind: i.kind, slug: i.slug })), confirmed: true });
+      if (r.ok) { await showJob(); watch(); }
+    }
+
     const poll = async () => {
       clearInterval(S.pollTimer);
       S.pollTimer = setInterval(async () => {
         if (S.view !== 'updates') { clearInterval(S.pollTimer); return; }
         state = (await api('/api/updates')).data;
-        holder.replaceChildren(renderUpdates(state));
-        if (state.status !== 'running') { clearInterval(S.pollTimer); button.disabled = false; }
+        paint();
+        if (state.status !== 'running') { clearInterval(S.pollTimer); button.disabled = false; if (job.status === 'running') watch(); }
       }, 3000);
     };
     button.addEventListener('click', async () => {
       button.disabled = true;
       const r = await act('/api/updates/refresh', {});
       state = (await api('/api/updates')).data;
-      holder.replaceChildren(renderUpdates(state));
+      paint();
       if (state.status === 'running') poll(); else button.disabled = false;
       if (!r.ok) button.disabled = false;
     });
-    if (state.status === 'running') { button.disabled = true; poll(); }
+    paint();
+    if (state.status === 'running') { button.disabled = true; poll(); } else if (job.status === 'running') watch();
     return h('div', { class: 'stack' },
-      pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. This page only looks – it never installs anything.', button),
-      holder,
-      h('div', { class: 'note', text: 'Update from each website\'s WordPress dashboard (Dashboard → Updates), one website at a time, and look at the website afterwards. Security updates matter most. A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it.' }));
+      pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. Nothing is updated unless you press an Update button: there are no automatic updates.', button),
+      jobHolder, holder,
+      h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it.' }));
   }
-
   // ------------------------------------------------------------------ settings
   const minutes = seconds => Math.round(seconds / 60);
 

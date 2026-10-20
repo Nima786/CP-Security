@@ -1,5 +1,5 @@
 """Which WordPress sites have updates waiting: WordPress itself, plugins and themes.
-This only looks; it never installs anything."""
+This module only looks. Installing is done by wpupdate.py, one item at a time, when a person presses the button."""
 import csv
 import glob
 import io
@@ -9,6 +9,14 @@ import shlex
 from concurrent.futures import ThreadPoolExecutor
 
 from . import config, util
+
+# things that are most likely to hurt a shop if an update goes wrong: the screen says "try the test copy first"
+CAREFUL_RE = re.compile(r"woocommerce|payment|gateway|checkout|stripe|paypal|zarinpal|idpay|mellat|saman|snapp|bricks|"
+                        r"elementor|divi|wpbakery|memberpress|learndash|revslider|slider-revolution", re.I)
+
+
+def is_careful(slug, title=""):
+    return bool(CAREFUL_RE.search("%s %s" % (slug or "", title or "")))
 
 
 def _wordpress_sites():
@@ -51,9 +59,10 @@ def _rows(kind, text):
     items = []
     if text and text.strip():
         for row in csv.DictReader(io.StringIO(text.strip())):
-            items.append({"what": row.get("title") or row.get("name") or "?", "slug": row.get("name", ""),
+            what = row.get("title") or row.get("name") or "?"
+            items.append({"what": what, "slug": row.get("name", ""),
                           "from": row.get("version", ""), "to": row.get("update_version", ""), "kind": kind,
-                          "status": row.get("status", "")})
+                          "status": row.get("status", ""), "careful": is_careful(row.get("name", ""), what)})
     return items
 
 
@@ -69,6 +78,14 @@ def parse_site(name, plugins_csv, core_csv, themes_csv=None):
             items.append({"what": "WordPress itself", "from": "", "to": version.strip(),
                           "kind": "core-" + (update_type.strip() or "update")})
     return {"site": name, "items": items, "checked": True}
+
+
+def look_one(name):
+    """Look at one website again (after it was updated). Returns the same kind of entry as waiting(), or None."""
+    for site in _wordpress_sites():
+        if site[2] == name:
+            return parse_site(*_look(site))
+    return None
 
 
 def waiting():
