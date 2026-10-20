@@ -29,6 +29,7 @@
     blocked: 'M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a8 8 0 016.3 12.9L7.1 5.7A7.9 7.9 0 0112 4zM5.7 7.1l11.2 11.2A8 8 0 015.7 7.1z',
     access: 'M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z',
     firewall: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z',
+    logins: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
     updates: 'M17.65 6.35A7.96 7.96 0 0012 4a8 8 0 108 8h-2a6 6 0 11-1.76-4.24L13 11h7V4l-2.35 2.35z',
     settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
     check: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
@@ -167,6 +168,7 @@
     ['headers', 'Security headers', 'headers', 'Headers', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
+    ['logins', 'One-click login', 'logins', 'Login', 'Protection', false],
     ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
     ['settings', 'Settings', 'settings', 'Settings', 'Manage', false],
   ];
@@ -1394,6 +1396,113 @@
       jobHolder, uploadHolder, holder,
       h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website.' }));
   }
+  // ------------------------------------------------------------------ one-click login to the websites
+  const HELPER_STATUS = {
+    installed: ['Ready', 'ok'], missing: ['Not installed', ''], changed: ['Needs reinstalling', 'warn'],
+    unknown: ['Not read yet', ''], unsupported: ['Cannot be used here', 'warn'],
+  };
+
+  function renderLogins(data, ctl) {
+    const sites = data.sites || [];
+    const job = data.job || { status: 'idle', items: [] };
+    const working = job.status === 'running';
+    const scanning = data.scan && data.scan.status === 'running';
+    const ready = sites.filter(s => s.status === 'installed');
+    const canInstall = sites.filter(s => s.checked && ['missing', 'changed'].includes(s.status));
+    const inJob = Object.fromEntries((job.items || []).map(i => [i.site, i]));
+
+    const rows = sites.map(s => {
+      const [label, kind] = HELPER_STATUS[s.status] || [s.status, ''];
+      const ji = working ? inJob[s.site] : null;
+      const names = s.admins.map(a => h('option', { value: a.login, selected: a.login === s.login, text: a.name === a.login ? a.login : a.name + ' (' + a.login + ')' }));
+      const here = [];
+      if (s.status === 'installed') here.push(h('button', { class: 'btn primary', type: 'button', disabled: working, text: 'Open admin', onclick: () => ctl.openAdmin(s.site) }));
+      if (s.checked && s.status !== 'installed' && s.status !== 'unsupported') here.push(h('button', { class: 'btn' + (s.status === 'missing' ? ' primary' : ''), type: 'button', disabled: working, text: s.status === 'changed' ? 'Reinstall' : 'Install on this website', onclick: () => ctl.install([s.site]) }));
+      if (s.status === 'installed' || s.status === 'changed') here.push(h('button', { class: 'btn small', type: 'button', disabled: working, text: 'Remove', onclick: () => ctl.remove([s.site]) }));
+      return h('div', { class: 'door' },
+        h('div', { class: 'door-head' }, h('strong', { class: 'mono', text: s.site }), ji ? null : badge(label, kind),
+          ji ? (ji.status === 'working' ? workingBadge('Working\u2026') : ji.status === 'waiting' ? badge('In line', '') : badge(ji.status === 'done' ? 'done' : 'failed', ji.status === 'done' ? 'ok' : 'bad')) : null),
+        ji && ji.status === 'working' && ji.step ? h('div', { class: 'small muted', style: 'margin-top:.3rem', text: ji.step }) : null,
+        s.problem ? h('div', { class: 'muted small', style: 'margin-top:.3rem', text: s.problem }) : null,
+        s.admins.length ? h('div', { class: 'door-line' }, h('label', { class: 'lbl', for: 'who-' + s.site, text: 'Log in as' }),
+          h('select', { id: 'who-' + s.site, disabled: working || !s.admins.length, 'aria-label': 'Log in to ' + s.site + ' as', onchange: ev => ctl.pickUser(s.site, ev.target.value) }, names)) : null,
+        here.length ? h('div', { class: 'door-actions' }, here) : null);
+    });
+
+    const last = job.status !== 'idle' && (job.items || []).length ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, working ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
+        h('h2', { 'aria-live': 'polite', text: working ? (job.action === 'install' ? 'Installing\u2026' : 'Removing\u2026') : 'Finished' }),
+        job.counts.done ? badge(job.counts.done + ' done', 'ok') : null, job.counts.failed ? badge(job.counts.failed + ' failed', 'bad') : null),
+      table(['Website', 'Result'], job.items.map(i => h('tr', {}, h('td', { class: 'mono', text: i.site }),
+        h('td', {}, i.status === 'working' ? workingBadge('Working\u2026') : i.status === 'waiting' ? badge('In line', '') : badge(i.status === 'done' ? 'done' : 'failed', i.status === 'done' ? 'ok' : 'bad'),
+          h('div', { class: 'small ' + (i.status === 'failed' ? '' : 'muted'), text: i.status === 'working' ? i.step : i.message })))), '')) : null;
+
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card' },
+        h('p', { text: 'Open any website\u2019s dashboard from here with one click, without typing a password. Each website needs one small helper file, which the panel puts there and tests first. The link it makes works once, for one minute.' }),
+        h('p', { class: 'muted small', style: 'margin-top:.5rem', text: 'It does not matter if a website has a custom login address: the link signs you in directly. It skips a website\u2019s own 2-step login, so this panel\u2019s login is the only gate. Every use is written to the Activity log.' }),
+        h('div', { class: 'row', style: 'margin-top:.9rem' },
+          h('button', { class: 'btn primary', type: 'button', disabled: working || !canInstall.length, text: canInstall.length ? 'Install on ' + canInstall.length + ' website' + (canInstall.length > 1 ? 's' : '') + '\u2026' : 'Installed everywhere', onclick: () => ctl.install(null, canInstall.length) }),
+          ready.length ? h('button', { class: 'btn', type: 'button', disabled: working, text: ready.length === 1 ? 'Remove from 1 website\u2026' : 'Remove from all ' + ready.length + '\u2026', onclick: () => ctl.remove(null, ready.length) }) : null,
+          scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at the websites\u2026') : null)),
+      last,
+      h('section', { class: 'card flush' }, h('div', { class: 'card-head' }, h('h2', { text: 'Websites' }), badge(ready.length + ' of ' + sites.length + ' ready', ready.length ? 'ok' : ''),
+        h('button', { class: 'btn small right', type: 'button', disabled: scanning || working, text: 'Check again', onclick: ctl.rescan })),
+        rows.length ? rows : empty('No WordPress websites were found on this server.')));
+  }
+
+  async function viewLogins() {
+    let data = (await api('/api/logins')).data;
+    const holder = h('div', {}, null);
+    const paint = () => holder.replaceChildren(renderLogins(data, ctl));
+    const poll = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'logins') { clearInterval(S.pollTimer); return; }
+        data = (await api('/api/logins')).data;
+        paint();
+        if (data.scan.status !== 'running' && data.job.status !== 'running') clearInterval(S.pollTimer);
+      }, 1200);
+    };
+    const refresh = async () => { data = (await api('/api/logins')).data; paint(); if (data.scan.status === 'running' || data.job.status === 'running') poll(); };
+
+    async function openAdmin(site) {
+      const tab = window.open('', '_blank');                  // opened now, while the click is fresh, so the browser does not block it
+      const { data: r } = await api('/api/logins/open', { method: 'POST', body: { site } });
+      if (r.ok && r.url) {
+        if (tab) { try { tab.opener = null; } catch (e) { /* ignore */ } tab.location.href = r.url; toast(r.message, 'ok'); }
+        else await dialog({ title: 'Open ' + site, ok: 'Close', cancel: '', content: h('div', {},
+          h('p', { text: 'Your browser blocked the new tab. Use this link within a minute (it works once):' }),
+          h('p', {}, h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open the dashboard of ' + site }))) });
+      } else {
+        if (tab) tab.close();
+        toast(r.message || 'That did not work.', 'bad');
+        await refresh();
+      }
+    }
+    async function run(action, names, count) {
+      const many = names ? names.length : count;
+      const adding = action === 'install';
+      const content = h('div', {},
+        h('p', { text: adding
+          ? 'One small file is put in the must-use plugins folder of ' + (names ? names[0] : many + ' website' + (many > 1 ? 's' : '')) + (names && names.length > 1 ? ' and ' + (names.length - 1) + ' more' : '') + ', one website at a time.'
+          : 'The helper file is taken off ' + (names ? names[0] : many + ' website' + (many > 1 ? 's' : '')) + (names && names.length > 1 ? ' and ' + (names.length - 1) + ' more' : '') + '. Nothing else on the website is touched.' }),
+        adding ? h('p', { class: 'muted small', text: 'Before it is switched on the file is checked for mistakes, tested with a link that has already expired, and the website must still answer. If anything is wrong the website is put back as it was. You can remove it again at any time.' }) : null);
+      if (!await dialog({ title: adding ? 'Install the login helper?' : 'Remove the login helper?', content, ok: adding ? 'Install' : 'Remove', danger: !adding })) return;
+      const r = await act('/api/logins/' + action, names ? { domains: names, confirmed: true } : { all: true, confirmed: true });
+      if (r.ok) await refresh();
+    }
+    const ctl = {
+      openAdmin, install: (names, count) => run('install', names, count), remove: (names, count) => run('remove', names, count),
+      pickUser: async (site, login) => { const r = await act('/api/logins/user', { site, login }); await refresh(); return r; },
+      rescan: async () => { await act('/api/logins/scan', {}); await refresh(); },
+    };
+    paint();
+    if (data.scan.status === 'running' || data.job.status === 'running') poll();
+    return h('div', { class: 'stack' },
+      pageHead('One-click login', 'Open the dashboard of any website from here, signed in, without typing a password.'), holder);
+  }
+
   // ------------------------------------------------------------------ settings
   const minutes = seconds => Math.round(seconds / 60);
 
@@ -1641,7 +1750,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];

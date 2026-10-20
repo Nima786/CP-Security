@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, library, netinfo, ports, provision,
+from .. import (__version__, access, adminlogin, advisor, blocker, config, headers, health, htfile, library, netinfo, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -479,6 +479,40 @@ class LiveEngine:
             if entry is not None:
                 self._store_entry(entry)
 
+    # ------------------------------------------------------------------ one-click login to the websites
+    def _login_names(self):
+        try:
+            return adminlogin._names()
+        except (ImportError, OSError):                          # not a Linux server: there are no websites to list
+            return []
+
+    def logins_state(self):
+        if adminlogin.scan_state()["status"] == "idle":         # first look after a restart of the panel
+            adminlogin.scan_start()
+        data = adminlogin.state(self._login_names())
+        data["job"] = adminlogin.job_state()
+        return data
+
+    def logins_scan(self):
+        return adminlogin.scan_start()
+
+    def logins_run(self, action, names):
+        busy = self._guard()
+        if busy:
+            return busy
+        if names is None:                                       # "all": the ones that need it (install) or have it (remove)
+            current = {s["site"]: s["status"] for s in adminlogin.state(self._login_names())["sites"]}
+            names = [n for n, st in current.items() if (st in ("missing", "changed") if action == "install" else st in ("installed", "changed"))]
+            if not names:
+                return Result(False, "There is nothing to %s." % action, "none")
+        return adminlogin.start(action, names)
+
+    def logins_user(self, site, login):
+        return adminlogin.set_user(site, login)
+
+    def logins_open(self, site, to=""):
+        return adminlogin.make_link(site, to)
+
     # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
     def upload_dir(self):
         library.prepare()
@@ -617,6 +651,8 @@ class DemoEngine:
                         {"address": "45.60.0.30", "label": "Added by owner", "is_home": False}]
         self.never = [{"address": "104.16.0.0/13", "label": "Cloudflare"}, {"address": "172.64.0.0/13", "label": "Cloudflare"}]
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
+        self.login_helper, self.login_choice = {"shop.example.com": "installed", "staging.example.com": "changed"}, {}
+        self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.up_zips, self.up_installed = [], {}              # uploaded plugin and theme files, and what the websites have after an update
         self.fw_enabled, self.fw_rules, self.fw_next, self.fw_pending_until, self.fw_previous = False, [], 1, 0.0, None
         self.wp_job = None
@@ -1239,6 +1275,51 @@ class DemoEngine:
 
     def uploads_scan(self):
         return Result(True, "Looking at the websites.")
+
+    # ------------------------------------------------------------------ one-click login (made-up server)
+    DEMO_ADMINS = {"shop.example.com": [{"login": "owner", "name": "Shop Owner"}, {"login": "sara", "name": "Sara (manager)"}],
+                   "blog.example.com": [{"login": "admin", "name": "admin"}], "staging.example.com": [{"login": "dev", "name": "Dev team"}]}
+
+    def logins_state(self):
+        sites = []
+        for name in self.DEMO_SITES:
+            if name == "example.org":
+                sites.append({"site": name, "checked": False, "home": "", "status": "unknown", "problem": "WordPress could not be started on this website.", "admins": [], "login": ""})
+                continue
+            admins = self.DEMO_ADMINS[name]
+            chosen = self.login_choice.get(name)
+            sites.append({"site": name, "checked": True, "home": "https://" + name, "status": self.login_helper.get(name, "missing"), "problem": "",
+                          "admins": admins, "login": chosen if chosen in [a["login"] for a in admins] else admins[0]["login"]})
+        return {"scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "sites": sites, "job": self.login_job}
+
+    def logins_scan(self):
+        return Result(True, "Looking at the websites.")
+
+    def logins_run(self, action, names):
+        current = {s["site"]: s["status"] for s in self.logins_state()["sites"] if s["checked"]}
+        if names is None:
+            names = [n for n, st in current.items() if (st != "installed" if action == "install" else st in ("installed", "changed"))]
+        names = [n for n in names if n in current]
+        if not names:
+            return Result(False, "There is nothing to %s." % action, "none")
+        for n in names:
+            self.login_helper[n] = "installed" if action == "install" else "missing"
+        self.login_job = {"status": "done", "action": action, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+                          "items": [{"site": n, "status": "done", "message": "The helper is on %s and tested." % n if action == "install" else "The helper was removed from %s." % n, "step": ""} for n in names],
+                          "counts": {"waiting": 0, "working": 0, "done": len(names), "failed": 0}}
+        return Result(True, "Started on %d website%s." % (len(names), "" if len(names) == 1 else "s"))
+
+    def logins_user(self, site, login):
+        admins = self.DEMO_ADMINS.get(site)
+        if not admins or login not in [a["login"] for a in admins]:
+            return Result(False, "%s is not an administrator of that website." % login[:40], "invalid")
+        self.login_choice[site] = login
+        return Result(True, "Open admin on %s now logs in as %s." % (site, login))
+
+    def logins_open(self, site, to=""):
+        if self.login_helper.get(site) != "installed":
+            return Result(False, "The helper is not installed (or was changed) on this website. Install it first.", "not_installed"), ""
+        return Result(True, "Opening %s as %s." % (site, self.login_choice.get(site) or self.DEMO_ADMINS[site][0]["login"])), "https://%s/?cps-login=demo-link" % site
 
     def wpupdate_start(self, items):
         if self.wp_job and not self.wp_job.get("finished"):

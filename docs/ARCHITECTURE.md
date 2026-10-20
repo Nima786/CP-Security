@@ -134,6 +134,19 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   cache clearing as every other update. The upload request is the only one allowed to be larger than 64 KB: `server.py`
   gates it from the headers (host, session, secret token, size, free disk) BEFORE reading the body, then streams it to a private
   temporary file and removes that whatever happens.
+* **One-click admin login (`adminlogin.py`).** A per-website must-use plugin (`wp-content/mu-plugins/cp-security-login.php`, the folder
+  comes from WordPress's own `WPMU_PLUGIN_DIR` and must be under the website's home) is installed by an explicit action only. The
+  panel makes a link `/?cps-login=<payload>.<hmac>`: payload = base64url JSON `{u: login, e: expiry, n: nonce, t: optional dashboard page}`,
+  HMAC-SHA256 with a per-website secret. The secret lives in the helper file (written as the website's user, mode 600, fed through
+  standard input so it never shows on a command line) and in root-only `/etc/cp-security/adminlogin.json`. The helper acts on `init`
+  at priority 1: bad signature = ignored silently (410 only for a validly signed link that is expired, over 5 minutes ahead, or already
+  used; 403 for a non-administrator); success = `wp_set_auth_cookie` + redirect to `admin_url(t)`, with `DONOTCACHEPAGE`, no-cache and
+  `Referrer-Policy: no-referrer`. The only state on the website is a 15-minute transient noting that a nonce was used. Install =
+  write `.new` → `php -l` → move into place (keeping `.old`) → self-test with an expired token that must answer 410 containing "one-time
+  login link" → health check before and after → roll back on any failure (`drop_new` before the switch, `put_back` after). The page
+  never offers "Open admin" without re-reading the file's checksum, so a changed helper gets no link. Rejected on purpose: storing
+  passwords, setting cookies across domains from the panel, per-link tokens stored from WP-CLI (object-cache mismatch), binding the
+  link to an IP address. Trade-off: it bypasses a website's own 2-step login; the panel's login is the gate.
 * **Refused-port counts** come from per-port dynamic sets in the firewall table (`refused_tcp`, `refused_udp`, one hour
   timeout). They restart on a reload. If this nftables rejects the counters, the file is written without them and the
   firewall still works.

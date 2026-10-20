@@ -36,6 +36,17 @@ def run_with_file(cmd, path, timeout=600):
         return 127, str(exc)
 
 
+def run_with_input(cmd, data, timeout=60):
+    """Like run, but `data` (bytes) is fed to the command's standard input. Used to let another user write a file."""
+    try:
+        p = subprocess.run(cmd, input=data, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        return p.returncode, p.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    except OSError as exc:
+        return 127, str(exc)
+
+
 def read_text(path, default=""):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:

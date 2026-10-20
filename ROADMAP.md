@@ -64,6 +64,7 @@ Rule for everything here: explained in plain words, shown on a page, and the own
 - ✅ Update by uploading a zip: for paid or custom plugins and themes. Upload once (kept on the server until you delete it), see which websites have the plugin and their versions, tick the ones to update; same safe routine, one at a time, several files in one run
 - ✅ "Refused in the last hour" on the Server firewall page (which ports the firewall turned away, with an "Allow this port" button);
   the Open ports page now says when the server firewall is what refuses a port
+- ✅ One-click admin login: "Open admin" per website, a signed link that works once for one minute, through a small tested helper file installed only on request (works with custom login addresses; skips a website's own 2-step login)
 - ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)
 - ⬜ Block PHP in uploads folders and hide backups, logs and other sensitive files (per website, with a self-test)
 - ⬜ Daily scan for backdoors and changed WordPress files

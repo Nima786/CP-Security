@@ -145,6 +145,12 @@ class App:
             ("POST", "/api/access/home"): (self.api_access_home, True),
             ("POST", "/api/access/never/add"): (self.api_never_add, True),
             ("POST", "/api/access/never/remove"): (self.api_never_remove, True),
+            ("GET", "/api/logins"): (self.api_logins, True),
+            ("POST", "/api/logins/scan"): (self.api_logins_scan, True),
+            ("POST", "/api/logins/install"): (self.api_logins_install, True),
+            ("POST", "/api/logins/remove"): (self.api_logins_remove, True),
+            ("POST", "/api/logins/user"): (self.api_logins_user, True),
+            ("POST", "/api/logins/open"): (self.api_logins_open, True),
             ("GET", "/api/uploads"): (self.api_uploads, True),
             ("POST", "/api/uploads/delete"): (self.api_uploads_delete, True),
             ("POST", "/api/uploads/scan"): (self.api_uploads_scan, True),
@@ -671,6 +677,39 @@ class App:
         res = self.engine.update_install(version)
         activity.write("UPDATE_INSTALL", ip=req.ip, version=version, ok=res.ok)
         return _result(res)
+
+    # ------------------------------------------------------------------ one-click login to the websites
+    def api_logins(self, req, session):
+        return _json(200, self.engine.logins_state())
+
+    def api_logins_scan(self, req, session):
+        return _result(self.engine.logins_scan())
+
+    def _logins_run(self, req, action):
+        b = req.json()
+        if b.get("confirmed") is not True:
+            return _json(409, {"ok": False, "code": "needs_confirm", "message": "Please confirm."})
+        names = _website_list(b)
+        res = self.engine.logins_run(action, names)
+        activity.write("LOGIN_HELPER_" + action.upper(), ip=req.ip, count="all" if names is None else len(names), ok=res.ok)
+        return _result(res)
+
+    def api_logins_install(self, req, session):
+        return self._logins_run(req, "install")
+
+    def api_logins_remove(self, req, session):
+        return self._logins_run(req, "remove")
+
+    def api_logins_user(self, req, session):
+        b = req.json()
+        return _result(self.engine.logins_user(_text(b.get("site"), 100), _text(b.get("login"), 100)))
+
+    def api_logins_open(self, req, session):
+        b = req.json()
+        site, to = _text(b.get("site"), 100), _text(b.get("to"), 120)
+        res, url = self.engine.logins_open(site, to)
+        activity.write("ADMIN_LOGIN_OPEN", ip=req.ip, site=site, ok=res.ok, code=res.code)
+        return _result(res, url=url)
 
     # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
     def api_uploads(self, req, session):

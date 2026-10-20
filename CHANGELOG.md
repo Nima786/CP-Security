@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0
+* **One-click admin login for every website.** New page "One-click login": press **Open admin** next to a website and its
+  dashboard opens in a new tab, already signed in, without typing a password. It works for any website, including ones with a
+  custom login address (a "hide login" plugin): the link signs you in directly, the login page is never opened.
+  * **Installed only when you press a button**, on one website or on all of them ("Install on N websites"). Each website gets one
+    small file in its own must-use plugins folder (WordPress loads that folder by itself, nothing has to be activated). The file
+    belongs to the website's own user and nobody else can read it, because it holds a secret that only that website and this panel
+    know. "Remove" takes it away again, for one website or all; nothing else on the website is touched, and other files in the same
+    folder are never changed.
+  * **Tested before it is switched on.** The file is checked for PHP mistakes, put in place, and then tested with a link that has
+    already expired: the website must answer "this link has expired" (which proves the file is loaded and the secret matches), and the
+    website must answer as well as before. If any of that fails, the website is put back exactly as it was.
+  * **The link works once and for one minute.** It names the account, an expiry time and a random number, signed with the website's
+    secret. A link with a wrong signature is ignored silently; an expired or used one shows an "expired" page; an account that is not
+    an administrator is refused. Nothing is stored for a link except a note that it was used. The link itself is never written to the
+    Activity log, only who opened which website and when.
+  * **Which account:** each website has a "Log in as" list of its administrators (the first one by default); the choice is kept.
+  * Same proof on the real server as for everything else: the helper was installed on a test website through the panel's own code,
+    links were opened from the server and from outside (redirect to the dashboard, signed in as the right account), and a reused link,
+    an expired link, a link signed with the wrong secret, a changed link, a link for an account that does not exist and one for an
+    account that is not an administrator were all refused; the website answered as before; the removal left the folder exactly as it was.
+  * **Trade-off, stated on the page:** this skips a website's own 2-step login, because the person using it is the server owner.
+    This panel's own login is the only gate, so keep it protected (2-step login on the panel, a limited address list).
+  * New in the Activity log: install and remove of the helper, and every use of "Open admin".
 ## 0.8.2
 * **Updating from an uploaded file no longer asks any plugin maker anything, before or after.** Measured on the real server by watching every
   outside name the server looked up: the update itself only contacts api.wordpress.org (WordPress's own check after any install, the

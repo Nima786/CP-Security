@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads",
+                 "/api/updates", "/api/uploads", "/api/logins",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1046,3 +1046,144 @@ class AfterUpdatesFromUploadedFiles(PanelCase):
         self.engine._wpupdate_done(["live.example.com", "test.example.com"])
         self.look.assert_called_once_with("live.example.com")
         self.noted.assert_called_once()
+
+
+class OneClickLogin(PanelCase):
+    """The one-click login page's routes, on the made-up server."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def sites(self):
+        return {s["site"]: s for s in self.request("GET", "/api/logins")[1]["sites"]}
+
+    def test_the_page_gets_every_website_with_its_state_and_its_administrators(self):
+        resp, data = self.request("GET", "/api/logins")
+        self.assertEqual(resp.status, 200)
+        for key in ("scan", "sites", "job"):
+            self.assertIn(key, data)
+        rows = self.sites()
+        self.assertEqual(rows["shop.example.com"]["status"], "installed")
+        self.assertEqual(rows["staging.example.com"]["status"], "changed")
+        self.assertEqual(rows["blog.example.com"]["status"], "missing")
+        self.assertFalse(rows["example.org"]["checked"])
+        self.assertEqual([a["login"] for a in rows["shop.example.com"]["admins"]], ["owner", "sara"])
+        for row in rows.values():
+            for key in ("site", "checked", "home", "status", "problem", "admins", "login"):
+                self.assertIn(key, row)
+
+    def test_installing_needs_an_explicit_yes(self):
+        resp, data = self.request("POST", "/api/logins/install", {"domains": ["blog.example.com"]})
+        self.assertEqual((resp.status, data["code"]), (409, "needs_confirm"))
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "missing")
+        resp, data = self.request("POST", "/api/logins/install", {"domains": ["blog.example.com"], "confirmed": "yes"})
+        self.assertEqual(resp.status, 409)
+
+    def test_installing_on_one_website_and_taking_it_off_again(self):
+        resp, data = self.request("POST", "/api/logins/install", {"domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "installed")
+        job = self.request("GET", "/api/logins")[1]["job"]
+        self.assertEqual((job["action"], job["counts"]["done"]), ("install", 1))
+        resp, data = self.request("POST", "/api/logins/remove", {"domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "missing")
+
+    def test_all_websites_means_the_ones_that_need_it(self):
+        resp, data = self.request("POST", "/api/logins/install", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual({n: s["status"] for n, s in self.sites().items() if s["checked"]}, {"shop.example.com": "installed", "staging.example.com": "installed", "blog.example.com": "installed"})
+        resp, data = self.request("POST", "/api/logins/install", {"all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+
+    def test_the_websites_must_be_named_or_all(self):
+        for body in ({"confirmed": True}, {"domains": [], "confirmed": True}, {"domains": "blog.example.com", "confirmed": True}, {"domains": [5], "confirmed": True}):
+            self.assertEqual(self.request("POST", "/api/logins/install", body)[0].status, 400, body)
+
+    def test_open_gives_the_link_only_when_the_helper_is_there(self):
+        resp, data = self.request("POST", "/api/logins/open", {"site": "blog.example.com"})
+        self.assertEqual((resp.status, data["code"], data["url"]), (400, "not_installed", ""))
+        resp, data = self.request("POST", "/api/logins/open", {"site": "shop.example.com"})
+        self.assertEqual(resp.status, 200, data)
+        self.assertIn("/?cps-login=", data["url"])
+        self.assertTrue(data["url"].startswith("https://shop.example.com/"))
+
+    def test_the_account_can_be_chosen_among_the_administrators_only(self):
+        resp, data = self.request("POST", "/api/logins/user", {"site": "shop.example.com", "login": "sara"})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.sites()["shop.example.com"]["login"], "sara")
+        resp, data = self.request("POST", "/api/logins/user", {"site": "shop.example.com", "login": "intruder"})
+        self.assertEqual((resp.status, data["code"]), (400, "invalid"))
+        self.assertEqual(self.sites()["shop.example.com"]["login"], "sara")
+
+    def test_looking_again_is_a_post(self):
+        resp, data = self.request("POST", "/api/logins/scan", {})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.request("GET", "/api/logins/scan")[0].status, 405)
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        for path, body in (("/api/logins/install", {"all": True, "confirmed": True}), ("/api/logins/remove", {"all": True, "confirmed": True}),
+                           ("/api/logins/open", {"site": "shop.example.com"}), ("/api/logins/user", {"site": "shop.example.com", "login": "sara"}),
+                           ("/api/logins/scan", {})):
+            self.assertEqual(self.request("POST", path, body)[0].status, 403, path)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/logins")[0].status, 401)
+        self.assertEqual(self.request("POST", "/api/logins/open", {"site": "shop.example.com"})[0].status, 401)
+
+    def test_the_changes_and_every_login_are_written_to_the_activity_log(self):
+        self.request("POST", "/api/logins/install", {"domains": ["blog.example.com"], "confirmed": True})
+        self.request("POST", "/api/logins/open", {"site": "blog.example.com"})
+        self.request("POST", "/api/logins/open", {"site": "shop.example.com"})
+        self.request("POST", "/api/logins/remove", {"domains": ["blog.example.com"], "confirmed": True})
+        events = self.request("GET", "/api/activity")[1]["events"]
+        names = [e["event"] for e in events]
+        for wanted in ("LOGIN_HELPER_INSTALL", "LOGIN_HELPER_REMOVE", "ADMIN_LOGIN_OPEN"):
+            self.assertIn(wanted, names)
+        self.assertEqual(sum(1 for n in names if n == "ADMIN_LOGIN_OPEN"), 2)
+        text = json.dumps(events)
+        self.assertNotIn("cps-login=", text)                                    # the link itself is never written down
+
+
+class OneClickLoginOnTheRealEngine(PanelCase):
+    """The real engine works out 'all websites' from what the page shows: the same ones the button counts."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None, clock=lambda: self.now[0])
+        self.login()
+        rows = [{"site": n, "status": st} for n, st in (("a.example.com", "missing"), ("b.example.com", "installed"), ("c.example.com", "changed"),
+                                                        ("d.example.com", "unknown"), ("e.example.com", "unsupported"))]
+        self.patch("cpsec.adminlogin._names", return_value=[r["site"] for r in rows])
+        self.patch("cpsec.adminlogin.state", return_value={"scan": {"status": "done", "finished": ""}, "sites": rows})
+        from cpsec.util import Result
+        self.start = self.patch("cpsec.adminlogin.start", return_value=Result(True, "Started"))
+
+    def test_install_on_all_means_the_ones_that_are_missing_or_changed(self):
+        resp, data = self.request("POST", "/api/logins/install", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.start.assert_called_once_with("install", ["a.example.com", "c.example.com"])
+
+    def test_remove_from_all_means_the_ones_that_have_it(self):
+        resp, data = self.request("POST", "/api/logins/remove", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.start.assert_called_once_with("remove", ["b.example.com", "c.example.com"])
+
+    def test_named_websites_are_passed_on_as_they_are(self):
+        self.request("POST", "/api/logins/install", {"domains": [" d.example.com "], "confirmed": True})
+        self.start.assert_called_once_with("install", ["d.example.com"])
+
+    def test_nothing_to_do_is_said_plainly(self):
+        self.patch("cpsec.adminlogin.state", return_value={"scan": {"status": "done", "finished": ""}, "sites": [{"site": "b.example.com", "status": "installed"}]})
+        resp, data = self.request("POST", "/api/logins/install", {"all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+        self.start.assert_not_called()
+
+    def test_it_waits_while_the_setup_is_running(self):
+        self.engine.runner.running = lambda: True
+        resp, data = self.request("POST", "/api/logins/install", {"domains": ["a.example.com"], "confirmed": True})
+        self.assertFalse(data["ok"])
+        self.start.assert_not_called()
