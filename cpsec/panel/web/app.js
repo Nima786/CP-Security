@@ -1003,6 +1003,18 @@
   const kindBadge = k => k.startsWith('core') ? badge('WordPress', 'bad') : badge(KIND[k][0], KIND[k][1]);
   const JOB_STATUS = { waiting: ['waiting', ''], working: ['working…', 'brand'], done: ['updated', 'ok'], failed: ['failed', 'bad'], restored: ['old version put back', 'warn'], skipped: ['skipped', ''] };
 
+  // a small turning circle inside a label: something is happening right now
+  const workingBadge = text => h('span', { class: 'badge brand' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), text);
+  const stepLine = i => i.step ? h('div', { class: 'small muted', style: 'white-space:normal', text: i.step + (i.seconds ? ' \u00b7 ' + i.seconds + ' s' : '') }) : null;
+  // a thin bar under the heading: finished items, plus half of the one that is running
+  const progressBar = (job, finished) => {
+    const total = job.items.length || 1;
+    const running = job.status === 'running';
+    const pct = !running ? 100 : job.phase === 'checking' ? 100 : Math.min(99, Math.round((finished + 0.5) / total * 100));
+    return h('div', { class: 'bar' + (running ? ' running' : ''), role: 'progressbar', 'aria-label': 'Update progress', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) },
+      h('div', { class: 'fill', style: 'width:' + pct + '%' }));
+  };
+
   // the progress of the updates you started (nothing here runs by itself)
   function renderJob(job, stop) {
     if (!job || job.status === 'idle' || !job.items.length) return null;
@@ -1012,20 +1024,22 @@
     const rows = job.items.map(i => {
       const [label, kind] = JOB_STATUS[i.status] || [i.status, ''];
       const manual = i.status === 'failed' || i.status === 'restored';
-      return h('tr', {},
+      return h('tr', { class: i.status === 'working' ? 'updating' : null },
         h('td', { class: 'mono', text: i.site }),
         h('td', {}, kindBadge(i.kind), ' ', i.title),
         h('td', { class: 'mono', text: (i.from || '–') + (i.to && i.to !== i.from ? ' \u2192 ' + i.to : '') }),
-        h('td', {}, badge(label, kind), i.message ? h('div', { class: 'small ' + (manual ? '' : 'muted'), text: i.message }) : null,
+        h('td', {}, i.status === 'working' ? workingBadge('Updating\u2026') : badge(label, kind), i.status === 'working' ? stepLine(i) : null,
+          i.message ? h('div', { class: 'small ' + (manual ? '' : 'muted'), text: i.message }) : null,
           manual ? h('a', { class: 'small', href: 'https://' + i.site + '/wp-admin/update-core.php', target: '_blank', rel: 'noopener', text: 'Update it by hand in WordPress' }) : null));
     });
     return h('section', { class: 'card flush' },
       h('div', { class: 'card-head' },
         running ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
-        h('h2', { text: running ? (job.phase === 'checking' ? 'Checking again what is still waiting…' : 'Updating… ' + finished + ' of ' + job.items.length) : 'Updates finished' }),
+        h('h2', { 'aria-live': 'polite', text: running ? (job.phase === 'checking' ? 'Checking again what is still waiting…' : 'Updating… ' + finished + ' of ' + job.items.length) : 'Updates finished' }),
         c.done ? badge(c.done + ' updated', 'ok') : null, c.restored ? badge(c.restored + ' put back', 'warn') : null,
         c.failed ? badge(c.failed + ' failed', 'bad') : null, c.skipped ? badge(c.skipped + ' skipped', '') : null,
         running && job.phase !== 'checking' ? h('button', { class: 'btn small right', type: 'button', text: job.stop ? 'Stopping…' : 'Stop after this one', disabled: !!job.stop, onclick: stop }) : null),
+      progressBar(job, finished),
       table(['Website', 'What', 'Version', 'Result'], rows, ''),
       h('div', { class: 'card-foot muted small', text: running
         ? 'Each update saves a copy first, then checks the website. If the website stops working, the old version goes back by itself. You can leave this page: it keeps going.'
@@ -1033,7 +1047,7 @@
   }
 
   function renderUpdates(state, ctl) {
-    ctl = ctl || { busy: false, update: () => {}, recheck: () => {} };
+    ctl = ctl || { busy: false, update: () => {}, recheck: () => {}, jobBy: () => null };
     const sites = state.sites || [];
     const checkingNow = state.checking || [];
     const withItems = sites.filter(s => s.items.length);
@@ -1067,20 +1081,31 @@
       withItems.map(s => {
         const mine = s.items.filter(updatable).map(i => Object.assign({ site: s.site }, i));
         const looking = checkingNow.includes(s.site);
+        const busyHere = mine.some(i => ctl.jobBy && ctl.jobBy(s.site, i.kind, i.slug));
+        const action = i => {
+          if (!updatable(i)) return null;
+          const ji = ctl.jobBy ? ctl.jobBy(s.site, i.kind, i.slug) : null;
+          if (!ji) return h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) });
+          if (ji.status === 'working') return h('span', {}, workingBadge('Updating\u2026'), stepLine(ji));
+          if (ji.status === 'waiting') return badge('In line', '');
+          if (ji.status === 'done') return badge('updated', 'ok');
+          if (ji.status === 'skipped') return badge('skipped', '');
+          return badge('not updated', 'warn');
+        };
         return h('section', { class: 'card flush' },
           h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
             looking ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
             s.looked ? h('span', { class: 'muted small', text: 'looked ' + s.looked }) : null,
             h('button', { class: 'btn small', type: 'button', disabled: looking || ctl.busy, text: looking ? 'Looking…' : 'Check again', onclick: () => ctl.recheck(s.site),
               title: 'Read the updates of this website again, for example after you updated something in WordPress yourself' }),
-            mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, text: 'Update all ' + mine.length + ' on this website\u2026', onclick: () => ctl.update(mine) }) : null),
-          table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', {},
+            mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, onclick: () => ctl.update(mine) },
+              busyHere ? [h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'Updating\u2026'] : 'Update all ' + mine.length + ' on this website\u2026') : null),
+          table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', { class: updatable(i) && ctl.jobBy && (ctl.jobBy(s.site, i.kind, i.slug) || {}).status === 'working' ? 'updating' : null },
             h('td', {}, kindBadge(i.kind)),
             h('td', {}, i.what, i.careful ? [' ', badge('careful', 'warn')] : null),
             h('td', { class: 'mono', text: i.from || '\u2013' }),
             h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null),
-            h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ',
-              updatable(i) ? h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) }) : null))), ''));
+            h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ', action(i)))), ''));
       }),
       unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null,
       partial.length ? h('div', { class: 'note', text: 'Only partly checked: ' + partial.map(s => s.site).join(', ') + '. A plugin on these websites would not load for the check, so updates that plugin makers send from their own servers (not WordPress.org) may be missing here. Look at them in WordPress.' }) : null);
@@ -1094,9 +1119,22 @@
     const button = h('button', { class: 'btn primary', type: 'button', text: 'Look for updates' });
 
     const stopJob = async () => { await act('/api/wpupdate/stop', {}); await showJob(); };
+    // the moment you confirm, the rows show it, before the server has answered
+    let starting = null;
+    const keyOf = (site, kind, slug) => site + '|' + kind + '|' + slug;
+    const jobBy = (site, kind, slug) => {
+      if (job.status === 'running') {
+        const found = job.items.find(x => x.site === site && x.kind === kind && x.slug === slug);
+        if (found) return found;
+      }
+      return starting && starting.has(keyOf(site, kind, slug)) ? { status: 'working', step: 'Starting\u2026', seconds: 0 } : null;
+    };
     const paint = () => {
       jobHolder.replaceChildren(renderJob(job, stopJob) || '');
-      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running', update: askUpdate, recheck }));
+      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running' || !!starting, update: askUpdate, recheck, jobBy }));
+      // the tab itself shows it too, for when you are looking at something else
+      if (job.status === 'running') document.title = '\u27f3 Updating ' + (job.counts.done + job.counts.failed + job.counts.restored + job.counts.skipped) + ' of ' + job.items.length + ' \u2013 CP-Security';
+      else if (document.title.startsWith('\u27f3')) document.title = 'WP Updates \u2013 CP-Security';
     };
     // the progress is looked at every 2 seconds while updates run, and the list is read again when they finish
     const watch = () => {
@@ -1111,7 +1149,7 @@
           toast(job.counts.failed + job.counts.restored ? 'Updates finished. Some need a look.' : 'Updates finished.', job.counts.failed + job.counts.restored ? 'bad' : 'ok');
         }
         paint();
-      }, 2000);
+      }, 1000);
     };
     async function showJob() { job = (await api('/api/wpupdate')).data; paint(); }
     async function askUpdate(items) {
@@ -1122,8 +1160,10 @@
         careful.length ? h('p', { class: 'error', style: 'min-height:0', text: 'Careful: ' + careful.map(i => i.what).join(', ') + ' can change how a shop or a page looks and works. If you have a test copy of this website, update that one first.' }) : null,
         h('p', { class: 'muted small', text: 'Before each update a copy of the files is saved, and once per website a copy of the database. Afterwards the website is checked. If it does not work, the old version is put back and you are told. Putting files back cannot undo changes an update made to the database; that is what the database copy is for.' }));
       if (!await dialog({ title: 'Update ' + items.length + ' item' + (items.length > 1 ? 's' : '') + '?', content, ok: 'Start updating' })) return;
+      starting = new Set(items.map(i => keyOf(i.site, i.kind, i.slug)));
+      paint();
       const r = await act('/api/wpupdate/start', { items: items.map(i => ({ site: i.site, kind: i.kind, slug: i.slug })), confirmed: true });
-      if (r.ok) { await showJob(); watch(); }
+      if (r.ok) { await showJob(); starting = null; paint(); watch(); } else { starting = null; paint(); }
     }
 
     // one website read again (fast): follow it until it is done

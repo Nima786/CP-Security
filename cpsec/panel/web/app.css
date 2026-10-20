@@ -279,3 +279,12 @@ details.quiet { padding: .9rem 1.25rem; }
   .door-line .lbl { flex: none; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
   .door-head .badge { margin-left: 0; }
 }
+
+/* ---------- WP updates: something is visibly happening ---------- */
+.dot-spin { display: inline-block; width: .85em; height: .85em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.12em; margin-right: .35rem; animation: spin .8s linear infinite; }
+.bar { height: 6px; background: var(--line); overflow: hidden; }
+.bar .fill { height: 100%; background: var(--brand); transition: width .6s ease; }
+.bar.running .fill { background-image: linear-gradient(45deg, rgba(255,255,255,.3) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.3) 50%, rgba(255,255,255,.3) 75%, transparent 75%); background-size: 1rem 1rem; animation: stripes 1s linear infinite; }
+@keyframes stripes { to { background-position: 1rem 0; } }
+tr.updating td { background: var(--surface-2); }
+@media (prefers-reduced-motion: reduce) { .dot-spin { animation-duration: 3s; } .bar.running .fill { animation: none; } }

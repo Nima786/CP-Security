@@ -193,8 +193,10 @@ def save_database(site, php, stamp):
     return rc == 0, "" if rc == 0 else "the database copy could not be made"
 
 
-def update_one(domain, kind, slug, db_saved=False, stamp=None):
-    """Update one plugin or theme. Returns {'ok', 'restored', 'from', 'to', 'message', 'notes'}."""
+def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None):
+    """Update one plugin or theme. Returns {'ok', 'restored', 'from', 'to', 'message', 'notes'}.
+    progress: called with a short plain sentence at each step, so the page can show that something is happening."""
+    say = progress or (lambda text: None)
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     result = {"ok": False, "restored": False, "from": "", "to": "", "message": "", "notes": [], "db_attempted": bool(db_saved)}
     if kind not in KINDS or not SLUG_RE.match(slug or ""):
@@ -216,6 +218,7 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         return result
     result["from"] = old
 
+    say("Checking that the website answers normally")
     before = health(domain)
     if not _good(before["home"]):
         result["message"] = ("The website is not answering normally now (the home page gives %s), so nothing was changed. "
@@ -236,18 +239,21 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         result["message"] = "The files of this %s were not found where WordPress keeps them." % kind
         return result
 
+    say("Saving a copy of the %s files" % kind)
     copy = "%s/cps-backups/%s-%s-%s" % (site["home"], kind, slug, stamp)
     rc, out = _shell(site["user"], "mkdir -p -m 700 %s && cp -a %s %s" % (shlex.quote(site["home"] + "/cps-backups"), shlex.quote(path), shlex.quote(copy)), 300)
     if rc != 0:
         result["message"] = "A copy of the current files could not be saved, so nothing was changed."
         return result
     if not db_saved:
+        say("Saving a copy of the database (this can take a minute)")
         ok, note = save_database(site, php, stamp)
         result["db_attempted"] = True
         if not ok:
             result["notes"].append(note)
 
     command = "%s update %s" % (kind, shlex.quote(slug))
+    say("Installing the new version")
     rc, out = _wp(site, php, command, 600)
     errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
     new = _current(site, php, kind, slug)
@@ -257,6 +263,7 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         # loaded and an administrator is asking, which is what the website's own Updates page does. Try that way once.
         admin = _admin_id(site, php)
         for area in ((True, False) if admin else ()):      # as inside wp-admin first; plain if a plugin cannot cope with that
+            say("Trying again the way the website\u2019s own Updates page does it")
             rc, out = _wp_full(site, php, command, 600, admin, area)
             errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
             new = _current(site, php, kind, slug)
@@ -274,9 +281,11 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
                              "a manual download. Update it in WordPress." % old)
         return result
 
+    say("Checking the website again")
     after = health(domain)
     bad = problems(before, after)
     if bad:
+        say("The website does not look right: putting the old version back")
         _restore(site, path, copy)
         again = health(domain)
         result["restored"] = True
@@ -288,6 +297,7 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
     result["message"] = "Updated from %s to %s. The website still answers normally." % (old, new)
     if own_server:
         result["message"] += " (This one updates from its maker's own server, not from WordPress.org.)"
+    say("Clearing the cache")
     _wp_full(site, php, "litespeed-purge all", 60)                    # ignored if the cache plugin is not there
     _clean_old_copies(site, kind, slug)
     return result
@@ -314,6 +324,10 @@ _job = {"status": "idle", "phase": "", "items": [], "started": "", "finished": "
 def state():
     with _lock:
         s = copy.deepcopy(_job)
+    now = time.time()
+    for i in s["items"]:                                   # how long the one that is running has been going
+        i["seconds"] = int(now - i["since"]) if i["status"] == "working" and i.get("since") else 0
+        i.pop("since", None)
     s["counts"] = {k: sum(1 for i in s["items"] if i["status"] == k) for k in ("waiting", "working", "done", "failed", "restored", "skipped")}
     return s
 
@@ -351,7 +365,7 @@ def start(items, titles=None, on_item=None, on_done=None):
         titles = titles or {}
         _job.update(status="running", phase="updating", started=time.strftime("%Y-%m-%d %H:%M:%S"), finished="", stop=False,
                     items=[dict(i, title=titles.get((i["site"], i["kind"], i["slug"]), i["slug"]), status="waiting",
-                                message="", **{"from": "", "to": ""}) for i in clean])
+                                message="", step="", since=0, **{"from": "", "to": ""}) for i in clean])
     threading.Thread(target=_run, args=(on_item, on_done), daemon=True).start()
     return Result(True, "Started: %d update%s." % (len(clean), "" if len(clean) == 1 else "s"))
 
@@ -380,18 +394,19 @@ def _run(on_item=None, on_done=None):
             if halted:
                 _set(index, status="skipped", message="Skipped, because you stopped the updates.")
                 continue
-            _set(index, status="working", message="Updating…")
+            _set(index, status="working", message="", step="Starting", since=time.time())
             site = it["site"]
             stamp = stamp_by_site.setdefault(site, time.strftime("%Y%m%d-%H%M%S"))
             try:
-                res = update_one(site, it["kind"], it["slug"], db_saved=db_by_site.get(site, False), stamp=stamp)
+                res = update_one(site, it["kind"], it["slug"], db_saved=db_by_site.get(site, False), stamp=stamp,
+                                 progress=lambda text, at=index: _set(at, step=text))
             except Exception as exc:                  # one item must never stop the others, or the panel
                 res = {"ok": False, "restored": False, "from": "", "to": "", "message": "Unexpected problem: %s" % str(exc)[:120], "notes": [], "db_attempted": False}
             db_by_site[site] = db_by_site.get(site, False) or bool(res.get("db_attempted"))
             touched.add(site)
             status = "done" if res["ok"] else ("restored" if res["restored"] else "failed")
             note = (" (" + "; ".join(res["notes"]) + ")") if res["notes"] else ""
-            _set(index, status=status, message=res["message"] + note, **{"from": res["from"], "to": res["to"]})
+            _set(index, status=status, message=res["message"] + note, step="", **{"from": res["from"], "to": res["to"]})
             if on_item:
                 try:
                     on_item(dict(it, status=status, message=res["message"]))

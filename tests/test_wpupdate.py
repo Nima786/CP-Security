@@ -496,3 +496,57 @@ class WhyAnUpdateFailed(UpdateCase):
         self.assertIn("Invalid license", r["message"])
         self.assertTrue(any(".maintenance" in s for s in self.wp.script_log), "a marker left by a killed update would keep the site in maintenance mode")
         self.assertTrue(all(".maintenance" not in s or s.startswith("test -f") for s in self.wp.script_log))
+
+
+class SomethingIsVisiblyHappening(UpdateCase):
+    """The page shows a spinner, the current step and how long it has been going, so a slow update does not look stuck."""
+
+    def test_each_step_is_announced_in_order(self):
+        steps = []
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", progress=steps.append)
+        self.assertTrue(r["ok"], r)
+        wanted = ["Checking that the website answers normally", "Saving a copy of the plugin files", "Saving a copy of the database",
+                  "Installing the new version", "Checking the website again", "Clearing the cache"]
+        positions = [next(i for i, s in enumerate(steps) if s.startswith(w)) for w in wanted]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_the_database_copy_is_only_announced_when_it_is_made(self):
+        steps = []
+        wpupdate.update_one(DOMAIN, "plugin", "woo", db_saved=True, progress=steps.append)
+        self.assertFalse([s for s in steps if "database" in s])
+
+    def test_putting_the_old_version_back_is_announced(self):
+        self.wp.broken = {"plugin:woo"}
+        steps = []
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo", progress=steps.append)
+        self.assertTrue(r["restored"])
+        self.assertTrue(any("putting the old version back" in s for s in steps), steps)
+
+    def test_a_missing_progress_function_is_fine(self):
+        self.assertTrue(wpupdate.update_one(DOMAIN, "plugin", "woo")["ok"])
+
+    def test_the_job_shows_the_step_and_the_seconds_while_it_works(self):
+        import threading
+        release, reached = threading.Event(), threading.Event()
+        real = wpupdate.update_one
+
+        def slow(domain, kind, slug, db_saved=False, stamp=None, progress=None):
+            progress("Installing the new version")
+            reached.set()
+            release.wait(5)
+            return real(domain, kind, slug, db_saved=db_saved, stamp=stamp, progress=progress)
+        self.patch("cpsec.wpupdate.update_one", side_effect=slow)
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo"}, {"site": DOMAIN, "kind": "theme", "slug": "blocksy"}])
+        self.assertTrue(reached.wait(5))
+        time.sleep(1.1)
+        st = wpupdate.state()
+        first, second = st["items"]
+        self.assertEqual(first["status"], "working")
+        self.assertEqual(first["step"], "Installing the new version")
+        self.assertGreaterEqual(first["seconds"], 1)
+        self.assertEqual((second["status"], second["seconds"], second["step"]), ("waiting", 0, ""))
+        self.assertNotIn("since", first, "the raw clock value stays inside")
+        release.set()
+        self.wait()
+        done = wpupdate.state()["items"]
+        self.assertTrue(all(i["step"] == "" and i["seconds"] == 0 for i in done), "nothing is shown as busy afterwards")

@@ -1105,7 +1105,9 @@ class DemoEngine:
         return Result(True, "Exception removed.")
 
     # ------------------------------------------------------------------ manual updates (made-up)
-    WP_DEMO_SECONDS = 1.2
+    WP_DEMO_SECONDS = 3.0
+    WP_DEMO_STEPS = ["Checking that the website answers normally", "Saving a copy of the plugin files",
+                     "Installing the new version", "Checking the website again"]
 
     def wpupdate_start(self, items):
         if self.wp_job and not self.wp_job.get("finished"):
@@ -1148,7 +1150,9 @@ class DemoEngine:
                 else:
                     it.update(status="done", message="Updated from %s to %s. The website still answers normally." % (it["from"], it["to"]))
             elif elapsed >= n * self.WP_DEMO_SECONDS:
-                it.update(status="working", message="Updating…")
+                spent = elapsed - n * self.WP_DEMO_SECONDS
+                step = self.WP_DEMO_STEPS[min(len(self.WP_DEMO_STEPS) - 1, int(spent / self.WP_DEMO_SECONDS * len(self.WP_DEMO_STEPS)))]
+                it.update(status="working", message="", step=step, seconds=int(spent))
         if all(i["status"] in ("done", "failed", "restored", "skipped") for i in job["items"]) and not job["finished"]:
             job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
             done = {(i["site"], i["kind"], i["slug"]) for i in job["items"] if i["status"] == "done"}

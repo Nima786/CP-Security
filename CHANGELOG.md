@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2
+* **You can see an update happening.** While plugins or themes are being updated on the WP Updates page:
+  the moment you confirm, the rows show "Starting"; the item being updated shows a turning circle, "Updating" and a plain line
+  about what it is doing now (checking the website, saving a copy of the files, saving a copy of the database, installing, checking
+  the website again, putting the old version back, clearing the cache) with how many seconds it has been going; the items still to
+  come say "In line"; a thin moving bar shows how far the whole batch has got; the "Update all" button of that website turns into
+  "Updating" and the other Update buttons are off; and the browser tab's title shows the count, so you can see it from another
+  tab. When it is over, nothing keeps turning. The screen is refreshed every second instead of every two.
+
 ## 0.7.1
 * **The Admin access page now says what the trusted list protects.** A new card at the top lists every door that only the
   trusted addresses can open (CyberPanel, the LiteSpeed admin page, the web terminal, this panel when it is set to trusted

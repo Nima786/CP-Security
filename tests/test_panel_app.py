@@ -509,6 +509,21 @@ class AdvisorAndSetup(PanelCase):
         self.assertFalse(res["ok"])
         self.assertEqual(res["code"], "invalid")
 
+    def test_the_job_carries_what_the_spinner_and_the_step_line_need(self):
+        self.request("POST", "/api/updates/refresh", {})
+        self.engine.WP_DEMO_SECONDS = 30
+        items = [{"site": "shop.example.com", "kind": "plugin", "slug": "woocommerce"}, {"site": "shop.example.com", "kind": "plugin", "slug": "wordpress-seo"}]
+        self.request("POST", "/api/wpupdate/start", {"items": items, "confirmed": True})
+        job = self.request("GET", "/api/wpupdate")[1]
+        self.assertEqual(job["status"], "running")
+        first, second = job["items"]
+        self.assertEqual(first["status"], "working")
+        self.assertTrue(first["step"], "a plain sentence about what is happening")
+        self.assertIn("seconds", first)
+        self.assertEqual(second["status"], "waiting")
+        self.assertEqual(self.request("GET", "/api/wpupdate")[1]["phase"], "updating")
+        self.request("POST", "/api/wpupdate/stop", {})
+
     def test_careful_updates_are_marked_in_the_list(self):
         self.request("POST", "/api/updates/refresh", {})
         items = {i["slug"]: i for s in self.request("GET", "/api/updates")[1]["sites"] for i in s["items"]}
