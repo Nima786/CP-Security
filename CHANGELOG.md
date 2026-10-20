@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1
+* **The normal Update button now uses a file you uploaded when there is one.** Found with the owner: Admin Columns Pro 7.1.7 was uploaded,
+  but the update was started from the normal list, which asks the plugin maker's server. That server answered "the update package
+  is not available" (the licence on the website is not active for it), so the update failed twice, while the uploaded file updated the
+  same website in 6 seconds. Now, when an uploaded file for the same plugin or theme is at least as new as the update that is
+  waiting, the row says "Update from your upload" and uses that file; "Update all on this website" does the same for each item
+  that has one. A normal update that is refused or does nothing now also says that you have already uploaded that version and
+  where to use it. The list of waiting updates also redraws as soon as a file has been uploaded or deleted.
+
 ## 0.8.0
 * **Update plugins and themes by uploading the maker's zip.** For the ones that cannot update by themselves (paid plugins, ones
   whose licence server refuses, custom ones). On the WP Updates page, "Update by uploading a file": choose one or several zip

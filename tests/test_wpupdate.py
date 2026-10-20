@@ -655,6 +655,33 @@ class UpdatingFromAnUploadedFile(UpdateCase):
         self.assertTrue([n for n in r["notes"] if "2.0.1" in n and "2.0" in n])
 
 
+class PointingToTheUploadedFile(UpdateCase):
+    """Found with the owner: the normal Update button asked the maker's server (which refused); the uploaded file would have worked."""
+
+    def test_a_refused_update_points_to_the_file_already_uploaded(self):
+        self.patch("cpsec.wpupdate.library.list_zips", return_value=[dict(ENTRY, version="2.0")])
+        self.wp.update_mode["plugin:woo"] = "fail"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertFalse(r["ok"])
+        self.assertIn("You have already uploaded version 2.0", r["message"])
+        self.assertIn("Update from your upload", r["message"])
+
+    def test_nothing_is_added_when_there_is_no_newer_upload(self):
+        self.wp.update_mode["plugin:woo"] = "fail"
+        self.assertNotIn("uploaded", wpupdate.update_one(DOMAIN, "plugin", "woo")["message"].split("Download failed")[-1])
+        self.patch("cpsec.wpupdate.library.list_zips", return_value=[dict(ENTRY, version="1.0")])
+        self.assertNotIn("already uploaded", wpupdate.update_one(DOMAIN, "plugin", "woo")["message"])
+        self.patch("cpsec.wpupdate.library.list_zips", return_value=[dict(ENTRY, slug="other", version="9.0")])
+        self.assertNotIn("already uploaded", wpupdate.update_one(DOMAIN, "plugin", "woo")["message"])
+
+    def test_a_do_nothing_update_points_there_too(self):
+        self.patch("cpsec.wpupdate.library.list_zips", return_value=[dict(ENTRY, version="2.0")])
+        self.wp.update_mode["plugin:woo"] = "nochange"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertIn("Nothing changed", r["message"])
+        self.assertIn("already uploaded version 2.0", r["message"])
+
+
 class UploadedFilesInTheJob(UpdateCase):
     def setUp(self):
         super().setUp()

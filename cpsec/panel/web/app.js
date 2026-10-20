@@ -1059,6 +1059,20 @@
   // ------------------------------------------------------------------ plugins and themes updated by uploading a file
   const sizeText = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
+  // version numbers compared the way the server does it ('7.1.10' is newer than '7.1.9')
+  const PRE_RANK = { dev: -4, alpha: -3, a: -3, beta: -2, b: -2, rc: -1 };
+  const versionParts = v => String(v).trim().toLowerCase().replace(/^v/, '').replace(/[-_+]/g, '.').replace(/(\d)([a-z])/g, '$1.$2').replace(/([a-z])(\d)/g, '$1.$2')
+    .split('.').filter(Boolean).map(p => /^\d+$/.test(p) ? [0, parseInt(p, 10)] : [p === 'p' || p === 'pl' ? 1 : (p in PRE_RANK ? PRE_RANK[p] : -5), 0]);
+  const cmpVersion = (a, b) => {
+    const x = versionParts(a), y = versionParts(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const p = x[i] || [0, 0], q = y[i] || [0, 0];
+      if (p[0] !== q[0]) return p[0] < q[0] ? -1 : 1;
+      if (p[1] !== q[1]) return p[1] < q[1] ? -1 : 1;
+    }
+    return 0;
+  };
+
   // one file, sent as it is (not wrapped), with a real progress figure
   function sendFile(file, onProgress) {
     return new Promise(resolve => {
@@ -1183,11 +1197,22 @@
         const mine = s.items.filter(updatable).map(i => Object.assign({ site: s.site }, i));
         const looking = checkingNow.includes(s.site);
         const busyHere = mine.some(i => ctl.jobBy && ctl.jobBy(s.site, i.kind, i.slug));
+        // a file you uploaded for this plugin is the way that works (the maker's server may refuse); use it when it is at least as new
+        const viaUpload = i => {
+          const z = ctl.uploadFor ? ctl.uploadFor(i.kind, i.slug, i.to) : null;
+          const row = z ? (z.rows || []).find(r => r.site === s.site) : null;
+          return z && row && row.can_update
+            ? { site: s.site, kind: i.kind, slug: i.slug, zip: z.id, what: z.name + ' (your upload)', from: i.from, to: z.version, careful: i.careful, file: z }
+            : null;
+        };
         const action = i => {
           if (!updatable(i)) return null;
           const ji = ctl.jobBy ? ctl.jobBy(s.site, i.kind, i.slug) : null;
-          if (!ji) return h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) });
-          return jobStatusCell(ji);
+          if (ji) return jobStatusCell(ji);
+          const up = viaUpload(i);
+          if (up) return h('button', { class: 'btn small primary', type: 'button', disabled: ctl.busy, text: 'Update from your upload',
+            title: 'Uses the file you uploaded (' + up.file.name + ' ' + up.file.version + ') instead of asking the plugin maker\u2019s server', onclick: () => ctl.update([up]) });
+          return h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) });
         };
         return h('section', { class: 'card flush' },
           h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
@@ -1195,7 +1220,7 @@
             s.looked ? h('span', { class: 'muted small', text: 'looked ' + s.looked }) : null,
             h('button', { class: 'btn small', type: 'button', disabled: looking || ctl.busy, text: looking ? 'Looking…' : 'Check again', onclick: () => ctl.recheck(s.site),
               title: 'Read the updates of this website again, for example after you updated something in WordPress yourself' }),
-            mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, onclick: () => ctl.update(mine) },
+            mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, onclick: () => ctl.update(mine.map(i => viaUpload(i) || i)) },
               busyHere ? [h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'Updating\u2026'] : 'Update all ' + mine.length + ' on this website\u2026') : null),
           table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', { class: updatable(i) && ctl.jobBy && (ctl.jobBy(s.site, i.kind, i.slug) || {}).status === 'working' ? 'updating' : null },
             h('td', {}, kindBadge(i.kind)),
@@ -1233,7 +1258,8 @@
     };
     const paint = () => {
       jobHolder.replaceChildren(renderJob(job, stopJob) || '');
-      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running' || !!starting, update: askUpdate, recheck, jobBy }));
+      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running' || !!starting, update: askUpdate, recheck, jobBy,
+        uploadFor: (kind, slug, to) => (uploads.zips || []).find(z => z.kind === kind && z.slug === slug && cmpVersion(z.version, to || '0') >= 0) || null }));
       paintUploads();
       // the tab itself shows it too, for when you are looking at something else
       if (job.status === 'running') document.title = '\u27f3 Updating ' + (job.counts.done + job.counts.failed + job.counts.restored + job.counts.skipped) + ' of ' + job.items.length + ' \u2013 CP-Security';
@@ -1259,11 +1285,11 @@
       S.uploadTimer = setInterval(async () => {
         if (S.view !== 'updates') { clearInterval(S.uploadTimer); return; }
         uploads = (await api('/api/uploads')).data;
-        paintUploads();
+        paint();                                  // the list of waiting updates uses the uploaded files too
         if (uploads.inventory.status !== 'running') clearInterval(S.uploadTimer);
       }, 1500);
     };
-    async function refreshUploads() { uploads = (await api('/api/uploads')).data; paintUploads(); watchUploads(); }
+    async function refreshUploads() { uploads = (await api('/api/uploads')).data; paint(); watchUploads(); }
     async function sendFiles(files) {
       for (const file of files) {
         const item = { name: file.name, pct: 0, state: 'sending', message: '' };

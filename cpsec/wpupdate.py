@@ -111,6 +111,15 @@ def reason(out):
     return text
 
 
+def upload_hint(kind, slug, installed):
+    """When the owner has already uploaded a newer file of this plugin or theme, say so: it is the way that works."""
+    for z in library.list_zips():
+        if z["kind"] == kind and z["slug"] == slug and library.version_cmp(z["version"], installed) > 0:
+            return (" You have already uploaded version %s of this: use \u201cUpdate by uploading a file\u201d (or the button "
+                    "\u201cUpdate from your upload\u201d) instead." % z["version"])
+    return ""
+
+
 def _clear_maintenance(site):
     """A killed or crashed update can leave WordPress's 'upgrading' marker behind, which keeps the website in maintenance mode."""
     path = shlex.quote(site["docroot"] + "/.maintenance")
@@ -292,6 +301,8 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None, up
     result["to"] = new
     if rc != 0 or errors or not new:
         result["message"] = "The update failed (%s). The website stays on version %s." % (reason(out)[:220], old)
+        if upload is None:
+            result["message"] += upload_hint(kind, slug, old)
         _clear_maintenance(site)
         _restore_if_changed(site, path, copy, result, domain, before)
         return result
@@ -299,7 +310,7 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None, up
         result["message"] = (("Nothing changed: it is still version %s. WordPress did not replace the files with the uploaded ones. "
                               "Update it in WordPress." % old) if upload is not None else
                              ("Nothing changed: it is still version %s. This often means the update needs a licence or "
-                              "a manual download. Update it in WordPress." % old))
+                              "a manual download. Update it in WordPress." % old + upload_hint(kind, slug, old)))
         return result
     if upload is not None and new != upload["version"]:
         result["notes"].append("the website reports version %s, the file says %s" % (new, upload["version"]))
