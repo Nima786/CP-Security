@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.2
+* **"Open admin" on the WP Updates page.** Every website card there now has an **Open admin** button next to "Check again" when that
+  website has the one-click login set up, so you can jump into its dashboard from the page where you are working. It signs in as the
+  account chosen on the One-click login page (hover the button to see which). Websites without the helper show no button; a line at
+  the bottom of the page says where to set it up. Right after the panel starts, the buttons appear as the websites are found.
+* **Bigger website names on the WP Updates cards**, in the normal font like on the One-click login page.
+* **Tables no longer need a sideways swipe on a phone.** On narrow screens every table in the panel now turns into a list: each row is
+  one block and each value sits under its small heading. Before, wide tables scrolled inside their card and the right-hand column
+  (the **Update** buttons on WP Updates, the "Let back in" buttons on Blocked) could be cut off. The list of waiting updates has its own
+  compact layout (type and name on one line, the versions under them, the button on the right), and so does the list of websites for an
+  uploaded file (tick box and name on one line). Checked at 320, 390 and 600 pixels wide on every page.
 ## 0.9.1
 * **The One-click login page is easier to read and use.** Each website is now one tidy row: the website name is larger and in the
   normal font (it was small and monospaced), its state sits right next to it, the "Log in as" list has the same width on every row,

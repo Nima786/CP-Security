@@ -119,9 +119,16 @@
   const tile = (label, value) => h('div', { class: 'card tile' }, h('div', { class: 'label', text: label }), h('div', { class: 'value', text: String(value) }));
   const MODES = { off: 'Off', watch: 'Watch only', block: 'Blocking' };
 
-  function table(headers, rows, emptyText) {
+  // each cell remembers its column heading: on a phone a table becomes a list and the heading is shown above the value
+  function labelCells(headers, rows) {
+    rows.forEach(r => { if (r && r.cells) Array.from(r.cells).forEach((c, i) => { if (headers[i]) c.setAttribute('data-label', headers[i]); }); });
+    return rows;
+  }
+
+  function table(headers, rows, emptyText, wrapClass) {
     if (!rows.length) return empty(emptyText);
-    return h('div', { class: 'table-wrap' }, h('table', {},
+    labelCells(headers, rows);
+    return h('div', { class: 'table-wrap' + (wrapClass ? ' ' + wrapClass : '') }, h('table', {},
       h('thead', {}, h('tr', {}, headers.map(x => h('th', { scope: 'col', text: x })))),
       h('tbody', {}, rows)));
   }
@@ -1131,7 +1138,7 @@
           z.filename + ' \u00b7 ' + sizeText(z.size) + ' \u00b7 uploaded ' + z.uploaded + ' \u00b7 fingerprint ',
           h('span', { class: 'mono', title: z.sha256, text: z.sha256.slice(0, 12) + '\u2026' }),
           z.renamed_from ? ' \u00b7 the folder inside was called ' + z.renamed_from + ' and is renamed to ' + z.slug : null),
-        table(['Choose', 'Website', 'Has now', 'Result'], rows, scanning ? 'Looking at the websites\u2026' : 'No website has this ' + z.kind + ' yet.'),
+        table(['Choose', 'Website', 'Has now', 'Result'], rows, scanning ? 'Looking at the websites\u2026' : 'No website has this ' + z.kind + ' yet.', 'files-table'),
         missing.length ? h('div', { class: 'muted small', style: 'margin-top:.5rem', text: 'Not installed on ' + missing.length + ' website' + (missing.length > 1 ? 's' : '') + ' (nothing is installed where it is missing): ' + missing.join(', ') }) : null);
     });
 
@@ -1164,7 +1171,7 @@
   }
 
   function renderUpdates(state, ctl) {
-    ctl = ctl || { busy: false, update: () => {}, recheck: () => {}, jobBy: () => null };
+    ctl = ctl || { busy: false, update: () => {}, recheck: () => {}, jobBy: () => null, loginFor: () => null, openAdmin: () => {} };
     const sites = state.sites || [];
     const checkingNow = state.checking || [];
     const withItems = sites.filter(s => s.items.length);
@@ -1217,11 +1224,13 @@
           return h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) });
         };
         return h('section', { class: 'card flush' },
-          h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
+          h('div', { class: 'card-head' }, h('h2', { class: 'site-name', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
             looking ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
             s.looked ? h('span', { class: 'muted small', text: 'looked ' + s.looked }) : null,
             h('button', { class: 'btn small', type: 'button', disabled: looking || ctl.busy, text: looking ? 'Looking…' : 'Check again', onclick: () => ctl.recheck(s.site),
               title: 'Read the updates of this website again, for example after you updated something in WordPress yourself' }),
+            ctl.loginFor && ctl.loginFor(s.site) ? h('button', { class: 'btn small', type: 'button', text: 'Open admin', 'aria-label': 'Open the dashboard of ' + s.site,
+              title: 'Opens the dashboard of ' + s.site + ' in a new tab, signed in as ' + ctl.loginFor(s.site).login, onclick: () => ctl.openAdmin(s.site) }) : null,
             mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, onclick: () => ctl.update(mine.map(i => viaUpload(i) || i)) },
               busyHere ? [h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'Updating\u2026'] : 'Update all ' + mine.length + ' on this website\u2026') : null),
           table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', { class: updatable(i) && ctl.jobBy && (ctl.jobBy(s.site, i.kind, i.slug) || {}).status === 'working' ? 'updating' : null },
@@ -1229,7 +1238,7 @@
             h('td', {}, i.what, i.careful ? [' ', badge('careful', 'warn')] : null),
             h('td', { class: 'mono', text: i.from || '\u2013' }),
             h('td', {}, h('span', { class: 'mono', text: i.to }), i.kind.startsWith('core-') ? [' ', badge(i.kind.replace('core-', '') + ' update', 'warn')] : null),
-            h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ', action(i)))), ''));
+            h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ', action(i)))), '', 'items-table'));
       }),
       unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null,
       partial.length ? h('div', { class: 'note', text: 'Only partly checked: ' + partial.map(s => s.site).join(', ') + '. A plugin on these websites would not load for the check, so updates that plugin makers send from their own servers (not WordPress.org) may be missing here. Look at them in WordPress.' }) : null);
@@ -1239,6 +1248,9 @@
     let state = (await api('/api/updates')).data;
     let job = (await api('/api/wpupdate')).data;
     let uploads = (await api('/api/uploads')).data;
+    let logins = { scan: { status: 'done' }, sites: [] };            // which websites can be opened with one click
+    const loadLogins = async () => { try { const r = await api('/api/logins'); if (r && r.data && r.data.sites) logins = r.data; } catch (e) { /* the page works without it */ } };
+    await loadLogins();
     const uploadHolder = h('div', {}, null);
     const ticks = {};                       // 'file id|website' -> chosen or not (what can be updated starts chosen)
     const seenFiles = new Set();
@@ -1261,6 +1273,8 @@
     const paint = () => {
       jobHolder.replaceChildren(renderJob(job, stopJob) || '');
       holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running' || !!starting, update: askUpdate, recheck, jobBy,
+        loginFor: site => (logins.sites || []).find(x => x.site === site && x.status === 'installed') || null,
+        openAdmin: async site => { if (!await openAdminTab(site)) { await loadLogins(); paint(); } },
         uploadFor: (kind, slug, to) => (uploads.zips || []).find(z => z.kind === kind && z.slug === slug && cmpVersion(z.version, to || '0') >= 0) || null }));
       paintUploads();
       // the tab itself shows it too, for when you are looking at something else
@@ -1388,15 +1402,44 @@
       if (state.status === 'running') poll(); else button.disabled = false;
       if (!r.ok) button.disabled = false;
     });
+    // right after a restart of the panel the websites are still being looked at: the buttons appear as they are found
+    const watchLogins = () => {
+      clearInterval(S.loginTimer);
+      if (!logins.scan || logins.scan.status !== 'running') return;
+      S.loginTimer = setInterval(async () => {
+        if (S.view !== 'updates') { clearInterval(S.loginTimer); return; }
+        await loadLogins();
+        paint();
+        if (logins.scan.status !== 'running') clearInterval(S.loginTimer);
+      }, 2500);
+    };
     paint();
     watchUploads();
+    watchLogins();
     if (state.status === 'running') { button.disabled = true; poll(); } else if ((state.checking || []).length) pollChecking(); else if (job.status === 'running') watch();
     return h('div', { class: 'stack' },
       pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. Nothing is updated unless you press an Update button: there are no automatic updates.', button),
       jobHolder, uploadHolder, holder,
-      h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website.' }));
+      h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website. Websites that have the one-click login set up show an Open admin button (set it up on the One-click login page).' }));
   }
   // ------------------------------------------------------------------ one-click login to the websites
+  // Opens a website's dashboard in a new tab, signed in (the One-click login and the WP Updates pages both use this).
+  // The tab is opened first, while the click is fresh, so the browser does not block it; the link is put in once the panel has made it.
+  async function openAdminTab(site) {
+    const tab = window.open('', '_blank');
+    const { data: r } = await api('/api/logins/open', { method: 'POST', body: { site } });
+    if (r && r.ok && r.url) {
+      if (tab) { try { tab.opener = null; } catch (e) { /* ignore */ } tab.location.href = r.url; toast(r.message, 'ok'); }
+      else await dialog({ title: 'Open ' + site, ok: 'Close', cancel: '', content: h('div', {},
+        h('p', { text: 'Your browser blocked the new tab. Use this link within a minute (it works once):' }),
+        h('p', {}, h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open the dashboard of ' + site }))) });
+      return true;
+    }
+    if (tab) tab.close();
+    toast((r && r.message) || 'That did not work.', 'bad');
+    return false;
+  }
+
   const HELPER_STATUS = {
     installed: ['Ready', 'ok'], missing: ['Not installed', ''], changed: ['Needs reinstalling', 'warn'],
     unknown: ['Not read yet', ''], unsupported: ['Cannot be used here', 'warn'],
@@ -1472,20 +1515,7 @@
     };
     const refresh = async () => { data = (await api('/api/logins')).data; paint(); if (data.scan.status === 'running' || data.job.status === 'running') poll(); };
 
-    async function openAdmin(site) {
-      const tab = window.open('', '_blank');                  // opened now, while the click is fresh, so the browser does not block it
-      const { data: r } = await api('/api/logins/open', { method: 'POST', body: { site } });
-      if (r.ok && r.url) {
-        if (tab) { try { tab.opener = null; } catch (e) { /* ignore */ } tab.location.href = r.url; toast(r.message, 'ok'); }
-        else await dialog({ title: 'Open ' + site, ok: 'Close', cancel: '', content: h('div', {},
-          h('p', { text: 'Your browser blocked the new tab. Use this link within a minute (it works once):' }),
-          h('p', {}, h('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open the dashboard of ' + site }))) });
-      } else {
-        if (tab) tab.close();
-        toast(r.message || 'That did not work.', 'bad');
-        await refresh();
-      }
-    }
+    async function openAdmin(site) { if (!await openAdminTab(site)) await refresh(); }
     async function run(action, names, count) {
       const many = names ? names.length : count;
       const adding = action === 'install';
@@ -1530,8 +1560,10 @@
         h('td', {}, num(name, 'bantime', minutes(t.bantime), minutes(L.bantime[0]), minutes(L.bantime[1]))));
     });
     const save = h('button', { class: 'btn primary', type: 'submit', text: 'Save these numbers' });
+    const head = ['Protection', 'Block after this many wrong tries', '…within this many minutes', '…for this many minutes'];
+    labelCells(head, rows);
     const form = h('form', {}, h('div', { class: 'table-wrap' }, h('table', { class: 'numbers' },
-      h('thead', {}, h('tr', {}, ['Protection', 'Block after this many wrong tries', '…within this many minutes', '…for this many minutes'].map(x => h('th', { scope: 'col', text: x })))),
+      h('thead', {}, h('tr', {}, head.map(x => h('th', { scope: 'col', text: x })))),
       h('tbody', {}, rows))), h('div', { class: 'card-foot' }, save));
     form.addEventListener('submit', async ev => {
       ev.preventDefault();
