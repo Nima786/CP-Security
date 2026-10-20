@@ -422,6 +422,33 @@ def rows(details=False):
     return out
 
 
+def locked_doors(found=None):
+    """The doors that only the trusted addresses can reach, for the Admin access page:
+    [{'name', 'ports', 'why', 'running'}], one line for doors that belong together."""
+    if found is None:
+        found = rows() or []
+        choices, locked_set = settings.port_choices(), set(settings.lock_ports())
+        have = {r["port"] for r in found}
+        found = found + [_row(p, None, [], choices, locked_set) for p in sorted(locked_set - have)]
+    why = {"default": "An admin page: always limited to the trusted addresses.",
+           "you": "You limited this door on the Open ports page.",
+           "panel": "This panel. It is set to trusted addresses only on the Settings page."}
+    order, groups = [], {}
+    for r in found:
+        if not r["locked_by"]:
+            continue
+        if r["group"] not in groups:
+            groups[r["group"]] = {"name": r["name"], "ports": [], "why": why.get(r["locked_by"], ""), "running": False}
+            order.append(r["group"])
+        g = groups[r["group"]]
+        g["ports"].append(r["port"])
+        g["running"] = g["running"] or r["reach"] is not None
+    out = [groups[k] for k in order]
+    for g in out:
+        g["ports"].sort()
+    return sorted(out, key=lambda g: g["ports"][0])
+
+
 def state():
     found = rows(details=True)
     trusted = access.list_admin()

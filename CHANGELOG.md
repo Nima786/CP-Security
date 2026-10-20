@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1
+* **The Admin access page now says what the trusted list protects.** A new card at the top lists every door that only the
+  trusted addresses can open (CyberPanel, the LiteSpeed admin page, the web terminal, this panel when it is set to trusted
+  addresses only, and every door you limited on the Open ports page), why each one is limited, and whether anything is running
+  there. A button goes to the Open ports page to change them. The page also says that the attack blocker never bans a trusted
+  address, and the server's own address in the list is explained.
+* **The "never blocked" list is explained and shorter.** It starts with a plain paragraph: the attack blocker bans an address for a while
+  when it keeps guessing passwords, and the addresses here are never banned. Lines with the same name become one (Cloudflare's
+  twenty-odd ranges are one line with a "Show the ranges" fold-out and one "Remove all" button, and a sentence says why Cloudflare is
+  there). A range like 173.245.48.0/20 is now described as what it is: a block of 4,096 addresses. IPv4 and IPv6 ranges are counted
+  apart. Removing a whole group reloads the blocker once instead of once per range.
+
 ## 0.7.0
 * **The Open ports page now says who uses each door and what would stop if you limited it.** Before, a door was just a
   name and a button. Now every door shows "Used by" and "If you limit it", worked out from this server itself: the real

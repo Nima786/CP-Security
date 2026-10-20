@@ -71,6 +71,82 @@ def list_never_block():
     return [{"address": a, "label": l} for a, l in read_list(config.P.never_list)]
 
 
+# ----------------------------------------------------------------------------- explaining the lists in plain words
+def _short(x):
+    return ("%.1f" % x).rstrip("0").rstrip(".") if x < 10 else str(round(x))
+
+
+def humanize_count(n):
+    """'4,096 addresses', 'about 1.9 million addresses'..."""
+    if n == 1:
+        return "1 address"
+    if n < 10000:
+        return "{:,} addresses".format(n)
+    if n < 1000000:
+        return "about {:,} thousand addresses".format(round(n / 1000))
+    if n < 10 ** 9:
+        return "about %s million addresses" % _short(n / 1e6)
+    if n < 10 ** 12:
+        return "about %s billion addresses" % _short(n / 1e9)
+    return "a huge number of addresses"
+
+
+def describe_range(address):
+    """{'count', 'size_text'} for one entry. 173.245.48.0/20 is not one address: it is a whole block of 4,096 of them."""
+    try:
+        net = ipaddress.ip_network(address, strict=False)
+    except ValueError:
+        return {"count": 1, "size_text": "", "v6": False}
+    n = net.num_addresses
+    if n == 1:
+        text = "1 address"
+    elif net.version == 6:
+        text = "an IPv6 range (an enormous block of addresses)"
+    else:
+        text = "a range of " + humanize_count(n)
+    return {"count": n, "size_text": text, "v6": net.version == 6}
+
+
+NEVER_HINTS = {
+    "cloudflare": ("Cloudflare's own addresses. If your websites use Cloudflare, every visitor reaches your server through one of "
+                   "them, so banning one would shut out many real visitors at once."),
+}
+
+
+def _group_total(entries):
+    """'15 IPv4 ranges covering about 1.5 million addresses and 7 IPv6 ranges'. IPv6 is counted apart: one IPv6 range
+    holds more addresses than the whole IPv4 internet, so adding them together would say nothing."""
+    v4 = [e for e in entries if not e["v6"]]
+    v6 = [e for e in entries if e["v6"]]
+    parts = []
+    if v4:
+        if any(e["count"] > 1 for e in v4):
+            parts.append("%d IPv4 range%s covering %s" % (len(v4), "" if len(v4) == 1 else "s", humanize_count(sum(e["count"] for e in v4))))
+        else:
+            parts.append("%d IPv4 address%s" % (len(v4), "" if len(v4) == 1 else "es"))
+    if v6:
+        parts.append("%d IPv6 range%s" % (len(v6), "" if len(v6) == 1 else "s"))
+    return " and ".join(parts)
+
+
+def group_never(items):
+    """The never-block list for the page: entries with the same name become one line (Cloudflare has about twenty ranges)."""
+    order, groups = [], {}
+    for it in items:
+        if it["label"] not in groups:
+            groups[it["label"]] = []
+            order.append(it["label"])
+        groups[it["label"]].append(dict(describe_range(it["address"]), address=it["address"]))
+    out = []
+    for label in order:
+        entries = groups[label]
+        hint = next((v for k, v in NEVER_HINTS.items() if label.lower().startswith(k)), "")
+        out.append({"label": label, "hint": hint, "many": len(entries) > 1,
+                    "total_text": _group_total(entries),
+                    "entries": [{"address": e["address"], "size_text": e["size_text"]} for e in entries]})
+    return out
+
+
 # ----------------------------------------------------------------------------- applying it
 def build_nft(items, ports):
     v4, v6 = ["127.0.0.1"], ["::1"]
@@ -210,6 +286,17 @@ def add_never_many(addresses, label):
     if not fresh:
         return Result(False, "They are all on the list already.", "exists")
     return _commit_never(items + fresh, "%d %s addresses were added to the never-block list." % (len(fresh), label))
+
+
+def remove_never_many(addresses):
+    """Take several addresses off in one go (one reload of the blocker instead of one for each)."""
+    wanted = set(addresses)
+    items = read_list(config.P.never_list)
+    found = [a for a, _ in items if a in wanted]
+    if not found:
+        return Result(False, "None of them is on the list.", "missing")
+    return _commit_never([x for x in items if x[0] not in wanted],
+                         "%d address%s can be blocked again if %s misbehave." % (len(found), "" if len(found) == 1 else "es", "it" if len(found) == 1 else "they"))
 
 
 def remove_never(address):

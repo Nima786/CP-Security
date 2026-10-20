@@ -379,7 +379,14 @@ class App:
         return _result(res)
 
     def api_never_remove(self, req, session):
-        address = _text(req.json().get("address"), 64)
+        b = req.json()
+        many = b.get("addresses")
+        if isinstance(many, list) and many:
+            addresses = [_text(a, 64) for a in many[:200]]
+            res = self.engine.never_remove_many(addresses)
+            activity.write("NEVER_BLOCK_REMOVE", ip=req.ip, target="%d addresses" % len(addresses), ok=res.ok)
+            return _result(res)
+        address = _text(b.get("address"), 64)
         res = self.engine.never_remove(address)
         activity.write("NEVER_BLOCK_REMOVE", ip=req.ip, target=address, ok=res.ok)
         return _result(res)

@@ -107,3 +107,57 @@ class AdminList(EnvTestCase):
         self.assertIn("ignoreip = 127.0.0.1/8 ::1 45.60.0.10 45.60.0.20 93.184.216.34", ignore)
         self.assertTrue(self.fake.called("fail2ban-client", "reload"))
         self.assertTrue(self.fake.called("fail2ban-client", "unban", "93.184.216.34"))
+
+
+class InPlainWords(EnvTestCase):
+    """The page explains ranges, groups the Cloudflare lines and says which doors the trusted list protects."""
+
+    CLOUDFLARE = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22"]
+
+    def test_counts_are_said_in_words(self):
+        self.assertEqual(access.humanize_count(1), "1 address")
+        self.assertEqual(access.humanize_count(4096), "4,096 addresses")
+        self.assertEqual(access.humanize_count(65536), "about 66 thousand addresses")
+        self.assertEqual(access.humanize_count(1048576), "about 1 million addresses")
+        self.assertEqual(access.humanize_count(1900000), "about 1.9 million addresses")
+        self.assertEqual(access.humanize_count(3 * 10 ** 9), "about 3 billion addresses")
+        self.assertEqual(access.humanize_count(2 ** 64), "a huge number of addresses")
+
+    def test_a_slash_entry_is_described_as_a_range(self):
+        self.assertEqual(access.describe_range("173.245.48.0/20")["size_text"], "a range of 4,096 addresses")
+        self.assertEqual(access.describe_range("203.0.113.9")["size_text"], "1 address")
+        self.assertEqual(access.describe_range("203.0.113.9")["count"], 1)
+        self.assertEqual(access.describe_range("2606:4700::/32")["count"], 2 ** 96)
+        self.assertIn("IPv6 range", access.describe_range("2606:4700::/32")["size_text"])
+        self.assertEqual(access.describe_range("2606:4700::1")["size_text"], "1 address")
+        self.assertEqual(access.describe_range("not an address")["size_text"], "")
+
+    def test_entries_with_the_same_name_become_one_line_with_the_total(self):
+        items = [{"address": a, "label": "Cloudflare"} for a in self.CLOUDFLARE] + [{"address": "203.0.113.9", "label": "Office"}]
+        groups = access.group_never(items)
+        self.assertEqual([g["label"] for g in groups], ["Cloudflare", "Office"])
+        cf, office = groups
+        self.assertTrue(cf["many"])
+        self.assertEqual(len(cf["entries"]), 3)
+        self.assertEqual(cf["total_text"], "3 IPv4 ranges covering 6,144 addresses")          # 4096 + 1024 + 1024
+        self.assertIn("Cloudflare", cf["hint"])
+        self.assertFalse(office["many"])
+        self.assertEqual(office["hint"], "")
+        self.assertEqual(office["entries"][0]["size_text"], "1 address")
+
+    def test_ipv6_ranges_are_counted_apart_from_ipv4(self):
+        items = [{"address": a, "label": "Cloudflare"} for a in self.CLOUDFLARE[:2] + ["2400:cb00::/32", "2606:4700::/32"]]
+        cf = access.group_never(items)[0]
+        self.assertEqual(cf["total_text"], "2 IPv4 ranges covering about 5 thousand addresses and 2 IPv6 ranges".replace("about 5 thousand", "5,120"))
+        only6 = access.group_never([{"address": "2400:cb00::/32", "label": "x"}])[0]
+        self.assertEqual(only6["total_text"], "1 IPv6 range")
+        singles = access.group_never([{"address": "203.0.113.1", "label": "Office"}, {"address": "203.0.113.2", "label": "Office"}])[0]
+        self.assertEqual(singles["total_text"], "2 IPv4 addresses")
+
+    def test_several_addresses_can_be_taken_off_in_one_go(self):
+        access.write_list(config.P.never_list, [(a, "Cloudflare") for a in self.CLOUDFLARE] + [("203.0.113.9", "Office")], access.NEVER_HEADER)
+        res = access.remove_never_many(self.CLOUDFLARE[:2])
+        self.assertTrue(res.ok, res.message)
+        self.assertEqual([x["address"] for x in access.list_never_block()], [self.CLOUDFLARE[2], "203.0.113.9"])
+        self.assertFalse(access.remove_never_many(["198.51.100.1"]).ok)
+        self.assertEqual(access.remove_never_many(["198.51.100.1"]).code, "missing")

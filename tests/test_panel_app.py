@@ -478,6 +478,27 @@ class AdvisorAndSetup(PanelCase):
         log = self.request("GET", "/api/activity")[1]["events"]
         self.assertTrue(any(e["event"] == "WP_UPDATE_START" for e in log))
 
+    def test_the_admin_access_page_says_what_the_list_protects_and_groups_the_never_block_list(self):
+        data = self.request("GET", "/api/access")[1]
+        self.assertTrue(data["protects"], "the doors that only the trusted addresses can open")
+        self.assertIn("CyberPanel", [d["name"] for d in data["protects"]])
+        groups = {g["label"]: g for g in data["never_groups"]}
+        self.assertTrue(groups["Cloudflare"]["many"])
+        self.assertIn("Cloudflare", groups["Cloudflare"]["hint"])
+        self.assertIn("IPv4 ranges covering", groups["Cloudflare"]["total_text"])
+        server = [t for t in data["trusted"] if t["label"] == "This server"][0]
+        self.assertTrue(server["is_server"])
+        self.assertFalse([t for t in data["trusted"] if t["label"] == "Home Wi-Fi"][0]["is_server"])
+
+    def test_a_whole_group_can_be_taken_off_the_never_block_list_at_once(self):
+        both = [n["address"] for n in self.request("GET", "/api/access")[1]["never_block"] if n["label"] == "Cloudflare"]
+        self.assertGreaterEqual(len(both), 2)
+        resp, res = self.request("POST", "/api/access/never/remove", {"addresses": both})
+        self.assertTrue(res["ok"], res)
+        left = [n["address"] for n in self.request("GET", "/api/access")[1]["never_block"]]
+        self.assertFalse(set(both) & set(left))
+        self.assertFalse(self.request("POST", "/api/access/never/remove", {"addresses": both})[1]["ok"], "already gone")
+
     def test_one_website_can_be_looked_at_again(self):
         self.request("POST", "/api/updates/refresh", {})
         state = self.request("GET", "/api/updates")[1]

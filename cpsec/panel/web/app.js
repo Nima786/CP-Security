@@ -452,8 +452,39 @@
       await act('/api/access/remove', { address: t.address, confirmed }, 'Updating the lock…');
       redraw();
     };
+
+    // 1. what the trusted list actually protects
+    const doors = data.protects || [];
+    const protects = h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'What only your trusted addresses can open' }), data.lock_live ? badge('lock is on', 'ok') : badge('lock is NOT on', 'bad'),
+        h('button', { class: 'btn small right', type: 'button', text: 'Choose which doors', onclick: () => { location.hash = '#/ports'; } })),
+      doors.length
+        ? doors.map(d => h('div', { class: 'door' },
+          h('div', { class: 'door-head' }, h('strong', { text: d.name }), h('span', { class: 'muted small mono', text: (d.ports.length > 1 ? 'ports ' : 'port ') + d.ports.join(', ') }), d.running ? null : badge('not running', '')),
+          h('div', { class: 'muted small', style: 'margin-top:.25rem', text: d.why })))
+        : empty('Nothing is limited right now: every door is open to everyone.'),
+      h('div', { class: 'card-foot muted small', text: 'Anybody else is refused at these doors: they never even see a login page. Your websites are not affected. The attack blocker also never bans a trusted address.' }));
+
+    // 2. the never-block list: entries with the same name are one line
+    const neverRows = (data.never_groups || []).map(g => {
+      const only = g.entries[0];
+      const removeThem = async () => {
+        const what = g.many ? 'all ' + g.entries.length + ' ' + g.label + ' ranges' : only.address;
+        if (!await confirmBox('Remove ' + what + '?', 'The blocker will be allowed to ban ' + (g.many ? 'them' : 'it') + ' again if ' + (g.many ? 'they keep' : 'it keeps') + ' guessing passwords.', 'Remove', true)) return;
+        await act('/api/access/never/remove', { addresses: g.entries.map(e => e.address) }, 'Updating the blocker…');
+        redraw();
+      };
+      return h('tr', {},
+        h('td', {}, h('strong', { text: g.label }), g.hint ? h('div', { class: 'muted small', text: g.hint }) : null,
+          g.many ? h('details', { class: 'small', style: 'margin-top:.4rem' }, h('summary', { text: 'Show the ' + g.entries.length + ' ranges' }),
+            h('ul', { class: 'plain' }, g.entries.map(e => h('li', {}, h('span', { class: 'mono', text: e.address }), h('span', { class: 'muted', text: '  \u2013 ' + e.size_text }))))) : null),
+        h('td', {}, g.many ? h('span', { text: g.total_text }) : h('div', {}, h('span', { class: 'mono', text: only.address }), h('div', { class: 'muted small', text: only.size_text }))),
+        h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', text: g.many ? 'Remove all' : 'Remove', onclick: removeThem })));
+    });
+
     return h('div', { class: 'stack' },
-      pageHead('Admin access', 'Who can open CyberPanel, the LiteSpeed admin page and the web terminal. Your websites are not affected.'),
+      pageHead('Admin access', 'The trusted list decides who gets through to your private doors, such as CyberPanel. Everybody else is refused. Your websites are not affected.'),
+      protects,
       h('section', { class: 'card' },
         h('h2', { text: 'Your address right now' }),
         h('p', {}, h('span', { class: 'mono', text: mine }), ' ', data.client_ip_trusted ? badge('trusted', 'ok') : badge('not on the list', 'warn')),
@@ -465,24 +496,23 @@
           data.client_ip_trusted ? null : h('button', { class: 'btn', type: 'button', text: 'Also trust it (keep the others)', onclick: async () => {
             await act('/api/access/add', { address: mine, label: 'Added from the panel' }, 'Updating the lock…'); redraw(); } }))),
       h('section', { class: 'card flush' },
-        h('div', { class: 'card-head' }, h('h2', { text: 'Trusted addresses' }), data.lock_live ? badge('lock is on', 'ok') : badge('lock is NOT on', 'bad')),
+        h('div', { class: 'card-head' }, h('h2', { text: 'Trusted addresses' }), badge(String(data.trusted.length)),
+          h('span', { class: 'muted small right', text: 'These get through the doors above.' })),
         table(['Address', 'Name', ''], data.trusted.map(t => h('tr', {}, h('td', { class: 'mono', text: t.address }),
-          h('td', {}, t.label, t.address === mine ? [' ', badge('you', 'brand')] : null),
+          h('td', {}, t.label, t.address === mine ? [' ', badge('you', 'brand')] : null,
+            t.is_server ? h('div', { class: 'muted small', text: 'The server itself. Leave it: the server\u2019s own programs sometimes reach the admin pages through this address.' }) : null),
           h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: () => remove(t) })))), 'No trusted addresses.')),
       card('Add a trusted address', addForm,
         h('p', { class: 'muted small', style: 'margin-top:.75rem', text: 'Use the public address (search Google for "what is my IP"). Addresses like 192.168.x.x only exist inside a home network and do not work.' })),
       h('section', { class: 'card flush' },
-        h('div', { class: 'card-head' }, h('h2', { text: 'Never blocked by the attack blocker' }), badge(String(data.never_block.length)),
-          h('span', { class: 'muted small right', text: 'Cloudflare, your office, a monitoring service…' })),
-        table(['Address', 'Name', ''], data.never_block.map(n => h('tr', {}, h('td', { class: 'mono', text: n.address }), h('td', { text: n.label }),
-          h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', text: 'Remove', onclick: async () => {
-            if (await confirmBox('Remove ' + n.address + '?', 'The blocker will be allowed to block it again if it keeps guessing passwords.', 'Remove', true)) {
-              await act('/api/access/never/remove', { address: n.address }, 'Updating the blocker…'); redraw(); } } })))),
-          'Nothing is on this list.'),
+        h('div', { class: 'card-head' }, h('h2', { text: 'Never banned by the attack blocker' }), badge(String((data.never_groups || []).length))),
+        h('p', { class: 'muted', style: 'padding:1rem 1.25rem 0', text: 'The attack blocker bans an address for a while when it keeps guessing passwords. The addresses here are never banned, even if they misbehave (your trusted addresses are never banned either). Add one only when a ban would do harm: your office, a monitoring service, or Cloudflare.' }),
+        h('p', { class: 'muted small', style: 'padding:.5rem 1.25rem 1rem', text: 'A line like 173.245.48.0/20 is not one address but a range: the whole block of 4,096 addresses that starts at 173.245.48.0.' }),
+        table(['Name', 'What it covers', ''], neverRows, 'Nothing is on this list.'),
         h('div', { class: 'card-foot' }, neverForm)));
   }
 
-﻿  // ------------------------------------------------------------------ open ports
+  // ------------------------------------------------------------------ open ports
   const PORT_STATUS = {
     open: 'Open to everyone', refused: 'Refused by the server firewall', locked: 'Trusted addresses only', closed: 'This server only',
     private: 'Private network only', idle: 'Nothing running', mixed: 'Partly limited',

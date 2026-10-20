@@ -10,7 +10,7 @@ import datetime
 import threading
 import time
 
-from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, ports, provision,
+from .. import (__version__, access, advisor, blocker, config, headers, health, htfile, netinfo, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -105,6 +105,14 @@ class LiveEngine:
         with self._lock:
             self._changed()
             return access.remove_never(address)
+
+    def never_remove_many(self, addresses):
+        busy = self._guard()
+        if busy:
+            return busy
+        with self._lock:
+            self._changed()
+            return access.remove_never_many(addresses)
 
     def baseline_save(self):
         busy = self._guard()
@@ -223,8 +231,13 @@ class LiveEngine:
 
     # ------------------------------------------------------------------ admin access
     def access_state(self):
-        return {"trusted": access.list_admin(), "never_block": access.list_never_block(),
-                "lock_live": access.lock_is_live()}
+        trusted = access.list_admin()
+        mine = set(netinfo.local_addresses())
+        for t in trusted:
+            t["is_server"] = t["address"] in mine or t["label"].lower().startswith("this server")
+        never = access.list_never_block()
+        return {"trusted": trusted, "never_block": never, "never_groups": access.group_never(never),
+                "protects": ports.locked_doors(), "lock_live": access.lock_is_live()}
 
     def access_add(self, address, label):
         busy = self._guard()
@@ -672,6 +685,14 @@ class DemoEngine:
         self.never = [n for n in self.never if n["address"] != address]
         return Result(True, "%s can be blocked again if it misbehaves." % address)
 
+    def never_remove_many(self, addresses):
+        wanted = set(addresses)
+        found = [n for n in self.never if n["address"] in wanted]
+        if not found:
+            return Result(False, "None of them is on the list.", "missing")
+        self.never = [n for n in self.never if n["address"] not in wanted]
+        return Result(True, "%d addresses can be blocked again if they misbehave." % len(found))
+
     def baseline_save(self):
         return Result(True, "Saved: 4 of 5 websites answer normally. That is the reference from now on.")
 
@@ -728,7 +749,11 @@ class DemoEngine:
         return Result(True, "Automatic blocking is on again." if running else "Automatic blocking is stopped. Nobody is blocked any more.")
 
     def access_state(self):
-        return {"trusted": copy.deepcopy(self.trusted), "never_block": copy.deepcopy(self.never), "lock_live": True}
+        trusted = copy.deepcopy(self.trusted)
+        for t in trusted:
+            t["is_server"] = t["label"].lower().startswith("this server")
+        return {"trusted": trusted, "never_block": copy.deepcopy(self.never), "never_groups": access.group_never(self.never),
+                "protects": ports.locked_doors(self.ports_state()["ports"]), "lock_live": True}
 
     def access_add(self, address, label):
         addr, err = access.check_address(address)

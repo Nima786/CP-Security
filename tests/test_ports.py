@@ -433,3 +433,30 @@ class WhatTheServerReallyDoes(PortsCase):
 
     def test_a_program_that_has_gone_is_just_blank(self):
         self.assertEqual(ports.program_info(999999999), "")
+
+
+class WhatTheTrustedListProtects(PortsCase):
+    def test_the_locked_doors_are_listed_with_the_reason(self):
+        settings.save_port_choices({"locked": [5000], "opened": [], "accepted": []})
+        doors = {d["name"]: d for d in ports.locked_doors()}
+        self.assertEqual(doors["CyberPanel"]["ports"], [8090])
+        self.assertIn("admin page", doors["CyberPanel"]["why"])
+        self.assertIn("Open ports page", doors["Program: node"]["why"])
+        self.assertTrue(doors["CyberPanel"]["running"])
+
+    def test_a_locked_door_with_nothing_running_is_still_listed_and_marked(self):
+        doors = {d["name"]: d for d in ports.locked_doors()}
+        self.assertIn("LiteSpeed admin page", doors)                 # in the default admin lock but not in this server's pretend ss output
+        self.assertFalse(doors["LiteSpeed admin page"]["running"])
+
+    def test_the_doors_that_are_open_to_everyone_are_not_listed(self):
+        names = [d["name"] for d in ports.locked_doors()]
+        self.assertNotIn("Websites", names)
+        self.assertNotIn("Redis cache", names)
+
+    def test_doors_that_belong_together_are_one_line(self):
+        found = [ports._row(p, "everyone", ["dovecot"], {"locked": [143, 993], "opened": [], "accepted": []}, {143, 993}) for p in (143, 993)]
+        doors = ports.locked_doors(found)
+        self.assertEqual(len(doors), 1)
+        self.assertEqual(doors[0]["ports"], [143, 993])
+        self.assertEqual(doors[0]["name"], "Reading email (IMAP)")
