@@ -25,6 +25,8 @@ class FakeWordPress:
         self.saved = {}                     # copy path -> version when it was saved
         self.admin = ""                     # the administrator's number, as WP-CLI would print it
         self.own_server = set()             # keys WordPress.org knows nothing about: only found when plugins are loaded
+        self.admin_area_only = set()        # keys that only update when WordPress believes it is inside wp-admin
+        self.area_crashes = False           # loading plugins inside wp-admin makes WP-CLI fail
 
     def key_in(self, script):
         for kind in ("plugin", "theme"):
@@ -75,6 +77,10 @@ class FakeWordPress:
             mode = self.update_mode.get(key)
             if key in self.own_server and "--skip-plugins" in script:
                 mode = "nochange"
+            if key in self.admin_area_only and "WP_ADMIN" not in script:
+                mode = "nochange"
+            if self.area_crashes and "WP_ADMIN" in script:
+                return 255, "PHP Fatal error:  Uncaught Error in some-plugin.php\n"
             if mode == "fail":
                 return 1, "Error: Download failed. Invalid license.\n"
             if mode != "nochange":
@@ -388,6 +394,26 @@ class UpdatesFromTheMakersOwnServer(UpdateCase):
         self.assertIn("--skip-plugins", first)
         self.assertNotIn("--skip-plugins", second)
         self.assertIn("--user=5", second)
+
+    def test_a_plugin_that_only_starts_inside_wp_admin_is_updated_that_way(self):
+        self.wp.admin_area_only = {"plugin:woo"}
+        self.wp.own_server = {"plugin:woo"}
+        self.wp.admin = "5\n"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("WP_ADMIN", self.update_scripts()[-1])
+        self.assertEqual(len(self.update_scripts()), 2, "plain first, then once inside wp-admin; no third try")
+
+    def test_if_wp_admin_mode_crashes_the_plain_loaded_way_is_tried(self):
+        self.wp.own_server = {"plugin:woo"}
+        self.wp.area_crashes = True
+        self.wp.admin = "5\n"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertTrue(r["ok"], r)
+        scripts = self.update_scripts()
+        self.assertEqual(len(scripts), 3)
+        self.assertIn("WP_ADMIN", scripts[1])
+        self.assertNotIn("WP_ADMIN", scripts[2])
 
     def test_a_normal_update_is_not_tried_twice(self):
         self.wp.admin = "5\n"

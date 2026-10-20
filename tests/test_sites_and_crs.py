@@ -76,6 +76,8 @@ class FakeWordPressLook:
         self.log = []
         self.admin = "7\n"
         self.loaded_works = True
+        self.area_works = True               # plugins also load when WordPress believes it is inside wp-admin
+        self.admin_only_plugins = ""          # extra rows that only appear inside wp-admin (plugins that start with "if (!is_admin()) return;")
         self.vendor_plugins = self.HEADER + "bricksextras,BricksExtras,active,1.5.3,1.7.6\n"
         self.repo_plugins = self.HEADER
         self.core = "version,update_type\n7.1.3,major\n"
@@ -90,9 +92,13 @@ class FakeWordPressLook:
             return 0, self.admin
         if "load-update-core.php" in script:
             return 0, "" if self.loaded_works else (255, "")[1]
+        in_admin = "WP_ADMIN" in script
+        if loaded and in_admin and not self.area_works:
+            return 255, ""
         if "plugin list" in script:
             if loaded:
-                return (0, "PHP Notice:  Undefined variable in some-plugin.php on line 3\n" + self.vendor_plugins) if self.loaded_works else (255, "")
+                extra = self.admin_only_plugins if in_admin else ""
+                return (0, "PHP Notice:  Undefined variable in some-plugin.php on line 3\n" + self.vendor_plugins + extra) if self.loaded_works else (255, "")
             return 0, self.repo_plugins
         if "theme list" in script:
             return (0, self.HEADER) if (not loaded or self.loaded_works) else (255, "")
@@ -158,6 +164,29 @@ class UpdatesLook(EnvTestCase):
         self.assertTrue(vendors)
         self.assertTrue(plugins.startswith("name,title"))
         self.assertEqual(updates._csv("\ufeffname,title,status,version,update_version\n"), "name,title,status,version,update_version")
+
+    def test_a_plugin_that_only_starts_inside_wp_admin_is_found(self):
+        """Found on the real server: Admin Columns Pro begins with 'if (!is_admin()) return;', so from the command line it never speaks."""
+        self.wp.admin_only_plugins = "admin-columns-pro,Admin Columns Pro,active,6.4.18,7.1.7\n"
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        entry = updates.parse_site(name, plugins, core, themes, vendors)
+        self.assertEqual(sorted(i["slug"] for i in entry["items"] if i["kind"] == "plugin"), ["admin-columns-pro", "bricksextras"])
+        self.assertTrue(vendors)
+
+    def test_the_admin_area_way_is_the_first_one_tried_and_the_refresh_uses_it_too(self):
+        updates._look(self.SITE)
+        for word in ("load-update-core.php", "plugin list", "theme list"):
+            first = self.wp.log[self.wp.asked(word)[0]]
+            self.assertIn("WP_ADMIN", first, word)
+        self.assertNotIn("WP_ADMIN", self.wp.log[self.wp.asked("core check-update")[0]], "WordPress itself is asked the plain way")
+
+    def test_if_a_plugin_cannot_cope_with_wp_admin_the_plain_loaded_way_is_used(self):
+        self.wp.area_works = False
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        self.assertTrue(vendors, "plugins were still loaded, just not inside wp-admin")
+        self.assertIn("bricksextras", plugins)
+        last = self.wp.log[self.wp.asked("plugin list")[-1]]
+        self.assertNotIn("WP_ADMIN", last)
 
     def test_if_the_plugins_cannot_be_loaded_the_wordpress_org_list_is_used_and_it_is_said(self):
         self.wp.loaded_works = False

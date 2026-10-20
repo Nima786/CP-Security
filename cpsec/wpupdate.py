@@ -77,11 +77,13 @@ def _wp(site, php, args, timeout=300):
                   % (shlex.quote(site["home"]), shlex.quote(site["docroot"]), php, args), timeout)
 
 
-def _wp_full(site, php, args, timeout=120, admin=None):
+def _wp_full(site, php, args, timeout=120, admin=None, area=False):
     """Like _wp but with the plugins loaded (needed for commands a plugin adds, such as clearing the cache).
     admin: the number of an administrator to act as. A plugin that gets its updates from its maker's own server only
     offers them to somebody who is allowed to update."""
     who = "--user=%d " % int(admin) if admin else ""
+    if area:
+        who = updates.ADMIN_AREA + " " + who              # some plugins only start inside wp-admin
     return _shell(site["user"], "export HOME=%s; cd %s && %s /usr/bin/wp %s%s 2>&1"
                   % (shlex.quote(site["home"]), shlex.quote(site["docroot"]), php, who, args), timeout)
 
@@ -254,11 +256,13 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         # WordPress.org knows nothing about it. A plugin that updates from its maker's own server only says so once it is
         # loaded and an administrator is asking, which is what the website's own Updates page does. Try that way once.
         admin = _admin_id(site, php)
-        if admin:
-            rc, out = _wp_full(site, php, command, 600, admin)
+        for area in ((True, False) if admin else ()):      # as inside wp-admin first; plain if a plugin cannot cope with that
+            rc, out = _wp_full(site, php, command, 600, admin, area)
             errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
             new = _current(site, php, kind, slug)
             own_server = new != old
+            if new != old or rc == 0 or "Warning:" in out:   # worked, "already updated", or refused with a reason: do not ask twice
+                break
     result["to"] = new
     if rc != 0 or errors or not new:
         result["message"] = "The update failed (%s). The website stays on version %s." % (reason(out)[:220], old)

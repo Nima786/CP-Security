@@ -37,18 +37,26 @@ def _wordpress_sites():
 # has its own update server), but only if the last check is a minute old. Nothing is installed by this.
 NUDGE = "do_action('load-update-core.php');"
 
+# Some plugins only start when the page is inside /wp-admin/ (their first line is "if (!is_admin()) return;"), and some of
+# those are the ones that fetch their own updates (Admin Columns Pro is one). From the command line WordPress is never
+# "inside wp-admin", so they stay silent. This makes WordPress believe it is, while it loads, like the Updates page.
+ADMIN_AREA = "--exec=" + shlex.quote("define('WP_ADMIN', true);")
+
 
 def _shell(user, script, timeout):
     return util.run(["su", "-s", "/bin/bash", user, "-c", script], timeout=timeout)
 
 
-def _wp(docroot, user, php, args, plugins=False, admin=None, timeout=90):
+def _wp(docroot, user, php, args, plugins=False, admin=None, timeout=90, area=False):
     """Run WP-CLI as the site's own user. Returns its answer, or None if it failed or said nothing.
 
     plugins=False leaves the website's plugins and themes switched off (safe, fast: only what WordPress.org knows).
     plugins=True loads them, as the administrator `admin`: the only way to see updates that a plugin gets from its
-    maker's own server (not WordPress.org). Those plugins only talk to WordPress when somebody who may update is logged in."""
+    maker's own server (not WordPress.org). Those plugins only talk to WordPress when somebody who may update is logged in.
+    area=True also makes WordPress believe it is inside wp-admin (see ADMIN_AREA)."""
     flags = "" if plugins else "--skip-plugins --skip-themes "
+    if area:
+        flags += ADMIN_AREA + " "
     if admin:
         flags += "--user=%d " % int(admin)
     rc, out = _shell(user, "export HOME=%s; cd %s && %s /usr/bin/wp %s%s 2>/dev/null"
@@ -103,13 +111,14 @@ def _look(site, nudge=True):
     plugins = themes = None
     vendors = False
     admin = _admin_id(docroot, user, php)
-    if admin:
+    for area in ((True, False) if admin else ()):         # inside wp-admin first; if a plugin cannot cope with that, plain
         if nudge:
-            _wp(docroot, user, php, "eval " + shlex.quote(NUDGE), plugins=True, admin=admin, timeout=180)
-        p = _csv(_wp(docroot, user, php, "plugin list --update=available " + LIST_FIELDS, plugins=True, admin=admin, timeout=120))
-        t = _csv(_wp(docroot, user, php, "theme list --update=available " + LIST_FIELDS, plugins=True, admin=admin, timeout=120))
+            _wp(docroot, user, php, "eval " + shlex.quote(NUDGE), plugins=True, admin=admin, timeout=180, area=area)
+        p = _csv(_wp(docroot, user, php, "plugin list --update=available " + LIST_FIELDS, plugins=True, admin=admin, timeout=120, area=area))
+        t = _csv(_wp(docroot, user, php, "theme list --update=available " + LIST_FIELDS, plugins=True, admin=admin, timeout=120, area=area))
         if p is not None and t is not None:
             plugins, themes, vendors = p, t, True
+            break
     if not vendors:                                       # a plugin would not load: fall back to WordPress.org's list
         plugins = _csv(_wp(docroot, user, php, "plugin list --update=available " + LIST_FIELDS))
         themes = _csv(_wp(docroot, user, php, "theme list --update=available " + LIST_FIELDS))

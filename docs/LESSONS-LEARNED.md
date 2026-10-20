@@ -129,3 +129,6 @@ Things that cost hours to discover. They explain several design choices, so they
   and match only on words like "Unauthorized" for a hint.
 * A page that fetches data the moment a background job says "finished" must find the data ready: finish the follow-up
   work first, or the page shows the old state.
+* Some update-capable plugins start with `if (!is_admin()) return;` (Admin Columns Pro does), so WP-CLI never loads them. Define
+  `WP_ADMIN` before WordPress loads with `wp --exec="define('WP_ADMIN', true);" ...` (it runs early enough) and they speak.
+  Try that first and fall back to a plain load, then to `--skip-plugins`.

@@ -1,4 +1,13 @@
-# Changelog
+﻿# Changelog
+
+## 0.6.2
+* **Plugins that only start inside the WordPress admin area are found.** Some plugins begin with "if this is not the admin
+  area, do nothing", and several of them are the ones that fetch their own updates (Admin Columns Pro, JetEngine). From the
+  command line WordPress is never "inside wp-admin", so they stayed silent and their updates never showed up here, although the
+  website's own Plugins page showed them. Looking (and updating, when the plain way finds nothing) now first lets WordPress
+  believe it is inside wp-admin, as the Dashboard > Updates page does, and falls back to the plain way if a plugin cannot cope.
+  On the real server this showed Admin Columns Pro on three websites and JetEngine on one that were missing before.
+  Looking still installs nothing.
 
 ## 0.6.1
 * **After an update, the page now shows the true list.** The page read the list of what is still waiting the moment the
