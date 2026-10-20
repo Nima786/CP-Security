@@ -178,7 +178,7 @@ def menu_updates():
     heading("WEBSITES WITH UPDATES WAITING")
     print("This only LOOKS. To update a plugin or theme, use the panel (one at a time, with a copy saved first).")
     print("Nothing on this server ever updates by itself.")
-    print("It shows what each site last found out about, so a very new update may not be listed yet.\n")
+    print("Each site is asked again now, the way its own Dashboard > Updates page does (this takes about a minute).\n")
     data = updates.waiting()
     waiting = 0
     for s in data:

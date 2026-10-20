@@ -936,10 +936,10 @@
     return h('section', { class: 'card flush' },
       h('div', { class: 'card-head' },
         running ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
-        h('h2', { text: running ? 'Updating… ' + finished + ' of ' + job.items.length : 'Updates finished' }),
+        h('h2', { text: running ? (job.phase === 'checking' ? 'Checking again what is still waiting…' : 'Updating… ' + finished + ' of ' + job.items.length) : 'Updates finished' }),
         c.done ? badge(c.done + ' updated', 'ok') : null, c.restored ? badge(c.restored + ' put back', 'warn') : null,
         c.failed ? badge(c.failed + ' failed', 'bad') : null, c.skipped ? badge(c.skipped + ' skipped', '') : null,
-        running ? h('button', { class: 'btn small right', type: 'button', text: job.stop ? 'Stopping…' : 'Stop after this one', disabled: !!job.stop, onclick: stop }) : null),
+        running && job.phase !== 'checking' ? h('button', { class: 'btn small right', type: 'button', text: job.stop ? 'Stopping…' : 'Stop after this one', disabled: !!job.stop, onclick: stop }) : null),
       table(['Website', 'What', 'Version', 'Result'], rows, ''),
       h('div', { class: 'card-foot muted small', text: running
         ? 'Each update saves a copy first, then checks the website. If the website stops working, the old version goes back by itself. You can leave this page: it keeps going.'
@@ -947,10 +947,12 @@
   }
 
   function renderUpdates(state, ctl) {
-    ctl = ctl || { busy: false, update: () => {} };
+    ctl = ctl || { busy: false, update: () => {}, recheck: () => {} };
     const sites = state.sites || [];
+    const checkingNow = state.checking || [];
     const withItems = sites.filter(s => s.items.length);
     const unchecked = sites.filter(s => !s.checked);
+    const partial = sites.filter(s => s.checked && s.vendors === false);
     if (state.status === 'running') return card(null, h('div', { class: 'row' }, h('div', { class: 'spinner', style: 'margin:0' }), h('span', { text: 'Looking at every WordPress site… this takes about a minute.' })));
     if (state.status === 'idle') return card(null, h('p', { class: 'muted', text: 'Press "Look for updates" to see which websites have plugins, themes or WordPress itself waiting for an update.' }));
     if (state.status === 'failed') return card(null, h('p', { class: 'error', text: 'Looking failed: ' + (state.error || 'unknown reason') }));
@@ -978,8 +980,13 @@
           h('td', { class: 'mono', text: g.to }), h('td', { class: 'small', text: g.sites.length + ': ' + g.sites.sort().join(', ') }))), '')) : null,
       withItems.map(s => {
         const mine = s.items.filter(updatable).map(i => Object.assign({ site: s.site }, i));
+        const looking = checkingNow.includes(s.site);
         return h('section', { class: 'card flush' },
           h('div', { class: 'card-head' }, h('h2', { class: 'mono', text: s.site }), badge(s.items.length + ' waiting', 'warn'),
+            looking ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
+            s.looked ? h('span', { class: 'muted small', text: 'looked ' + s.looked }) : null,
+            h('button', { class: 'btn small', type: 'button', disabled: looking || ctl.busy, text: looking ? 'Looking…' : 'Check again', onclick: () => ctl.recheck(s.site),
+              title: 'Read the updates of this website again, for example after you updated something in WordPress yourself' }),
             mine.length > 1 ? h('button', { class: 'btn small primary right', type: 'button', disabled: ctl.busy, text: 'Update all ' + mine.length + ' on this website\u2026', onclick: () => ctl.update(mine) }) : null),
           table(['Type', 'Name', 'Now', 'Update to', ''], s.items.map(i => h('tr', {},
             h('td', {}, kindBadge(i.kind)),
@@ -989,7 +996,8 @@
             h('td', { class: 'actions' }, i.status === 'inactive' ? badge('switched off', '') : null, ' ',
               updatable(i) ? h('button', { class: 'btn small', type: 'button', disabled: ctl.busy, text: 'Update', onclick: () => ctl.update([Object.assign({ site: s.site }, i)]) }) : null))), ''));
       }),
-      unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null);
+      unchecked.length ? h('div', { class: 'note', text: 'Could not check: ' + unchecked.map(s => s.site).join(', ') }) : null,
+      partial.length ? h('div', { class: 'note', text: 'Only partly checked: ' + partial.map(s => s.site).join(', ') + '. A plugin on these websites would not load for the check, so updates that plugin makers send from their own servers (not WordPress.org) may be missing here. Look at them in WordPress.' }) : null);
   }
 
   async function viewUpdates() {
@@ -1002,7 +1010,7 @@
     const stopJob = async () => { await act('/api/wpupdate/stop', {}); await showJob(); };
     const paint = () => {
       jobHolder.replaceChildren(renderJob(job, stopJob) || '');
-      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running', update: askUpdate }));
+      holder.replaceChildren(renderUpdates(state, { busy: job.status === 'running', update: askUpdate, recheck }));
     };
     // the progress is looked at every 2 seconds while updates run, and the list is read again when they finish
     const watch = () => {
@@ -1032,6 +1040,24 @@
       if (r.ok) { await showJob(); watch(); }
     }
 
+    // one website read again (fast): follow it until it is done
+    const pollChecking = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'updates') { clearInterval(S.pollTimer); return; }
+        state = (await api('/api/updates')).data;
+        paint();
+        if (!(state.checking || []).length) { clearInterval(S.pollTimer); if (job.status === 'running') watch(); }
+      }, 1500);
+    };
+    async function recheck(site) {
+      const r = await act('/api/updates/refresh', { site });
+      if (!r.ok) return;
+      state = (await api('/api/updates')).data;
+      paint();
+      pollChecking();
+    }
+
     const poll = async () => {
       clearInterval(S.pollTimer);
       S.pollTimer = setInterval(async () => {
@@ -1050,11 +1076,11 @@
       if (!r.ok) button.disabled = false;
     });
     paint();
-    if (state.status === 'running') { button.disabled = true; poll(); } else if (job.status === 'running') watch();
+    if (state.status === 'running') { button.disabled = true; poll(); } else if ((state.checking || []).length) pollChecking(); else if (job.status === 'running') watch();
     return h('div', { class: 'stack' },
       pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. Nothing is updated unless you press an Update button: there are no automatic updates.', button),
       jobHolder, holder,
-      h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it.' }));
+      h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website.' }));
   }
   // ------------------------------------------------------------------ settings
   const minutes = seconds => Math.round(seconds / 60);

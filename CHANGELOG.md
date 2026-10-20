@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.1
+* **After an update, the page now shows the true list.** The page read the list of what is still waiting the moment the
+  updates said "finished", but the list was only read again after that, so the item just updated was still shown. The
+  updates now count as finished only after the list was read again (the card says "Checking again what is still waiting").
+* **Plugins that are not on WordPress.org are found** (WPCodeBox, BricksExtras, Perfmatters and similar, which update from
+  their maker's own server). Looking used to ask WordPress with every plugin switched off, and such plugins only speak when
+  they are loaded and an administrator asks. Looking now does what the website's own Dashboard > Updates page does: it
+  asks again first (WordPress.org and the plugin makers), then reads the lists with the plugins loaded, as an administrator.
+  Nothing is installed by looking. If a website's plugin will not load, that website falls back to the WordPress.org list and the page
+  says "Only partly checked". Updating such a plugin is tried the plain way first and then once the way the Dashboard does it.
+  Found on the real server: three updates that were invisible before.
+* **Check again** on every website: reads that one website again in a few seconds, for example after you updated something in
+  WordPress yourself. Each website also shows when it was last looked at.
+* A failed update now shows the real cause (the website's own "Warning" line, such as an unauthorised download) with a plain-words
+  hint when it looks like a licence problem, and removes a leftover "upgrading" marker that a killed update could leave behind.
+* A stray invisible character printed by one website no longer makes the panel throw that website's list away.
+* WP-CLI's own cache files now go into the website's home folder, not into its public folder.
+
 ## 0.6.0
 * **Update plugins and themes by hand, from the panel (WP Updates page).** Nothing ever updates by itself: a person picks
   an item and confirms. One item at a time, in the background, with a progress card. For each one: the website must

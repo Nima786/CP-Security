@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 from cpsec import config, crs_convert, sites, updates, util
 from tests.helpers import EnvTestCase
@@ -64,16 +64,128 @@ class UpdatesParsing(EnvTestCase):
         self.assertTrue(s["checked"])
         self.assertEqual([i["kind"] for i in s["items"]], ["theme"])
 
+    def test_a_site_that_could_not_be_read_is_marked_unchecked(self):
+        self.assertEqual(updates.parse_site("a.example.com", None, None), {"site": "a.example.com", "items": [], "checked": False})
+
+
+class FakeWordPressLook:
+    """Stands in for WP-CLI as the website's user. Remembers every command."""
+    HEADER = "name,title,status,version,update_version\n"
+
+    def __init__(self):
+        self.log = []
+        self.admin = "7\n"
+        self.loaded_works = True
+        self.vendor_plugins = self.HEADER + "bricksextras,BricksExtras,active,1.5.3,1.7.6\n"
+        self.repo_plugins = self.HEADER
+        self.core = "version,update_type\n7.1.3,major\n"
+
+    def su(self, cmd):
+        script = cmd[5]
+        self.log.append(script)
+        loaded = "--skip-plugins" not in script
+        if "core version" in script:
+            return 0, "6.8.1\n"
+        if "user list" in script:
+            return 0, self.admin
+        if "load-update-core.php" in script:
+            return 0, "" if self.loaded_works else (255, "")[1]
+        if "plugin list" in script:
+            if loaded:
+                return (0, "PHP Notice:  Undefined variable in some-plugin.php on line 3\n" + self.vendor_plugins) if self.loaded_works else (255, "")
+            return 0, self.repo_plugins
+        if "theme list" in script:
+            return (0, self.HEADER) if (not loaded or self.loaded_works) else (255, "")
+        if "core check-update" in script:
+            return 0, self.core
+        return 0, ""
+
+    def asked(self, word):
+        return [i for i, s in enumerate(self.log) if word in s]
+
+
+class UpdatesLook(EnvTestCase):
+    SITE = ("/home/a.example.com/public_html", "auser", "a.example.com")
+
+    def setUp(self):
+        super().setUp()
+        self.write(config.P.lsws_root + "/lsphp81/bin/php", "")
+        self.wp = FakeWordPressLook()
+        self.fake.table.append((["su"], self.wp.su))
+
     def test_the_scan_asks_for_plugins_themes_and_wordpress(self):
-        asked = []
-        self.patch("cpsec.updates._wp", side_effect=lambda docroot, user, args: asked.append(args) or "")
-        updates._look(("/home/a/public_html", "u", "a.example.com"))
-        joined = " | ".join(asked)
+        updates._look(self.SITE)
+        joined = " | ".join(self.wp.log)
         self.assertIn("plugin list", joined)
         self.assertIn("theme list", joined)
         self.assertIn("core check-update", joined)
-    def test_a_site_that_could_not_be_read_is_marked_unchecked(self):
-        self.assertEqual(updates.parse_site("a.example.com", None, None), {"site": "a.example.com", "items": [], "checked": False})
+
+    def test_updates_from_a_plugin_makers_own_server_are_found(self):
+        """Found on the real server: a plugin that is not on WordPress.org only speaks when it is loaded and an administrator asks."""
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        self.assertTrue(vendors)
+        entry = updates.parse_site(name, plugins, core, themes, vendors)
+        self.assertEqual([(i["slug"], i["from"], i["to"]) for i in entry["items"] if i["kind"] == "plugin"], [("bricksextras", "1.5.3", "1.7.6")])
+        self.assertTrue(entry["vendors"])
+        loaded = [self.wp.log[i] for i in self.wp.asked("plugin list")]
+        self.assertEqual(len(loaded), 1)
+        self.assertNotIn("--skip-plugins", loaded[0])
+        self.assertIn("--user=7", loaded[0], "asked as an administrator")
+
+    def test_the_websites_own_update_check_is_asked_first_then_the_lists_are_read(self):
+        updates._look(self.SITE)
+        order = [self.wp.asked(w)[0] for w in ("load-update-core.php", "plugin list", "theme list", "core check-update")]
+        self.assertEqual(order, sorted(order), "refresh, then plugins, themes, then WordPress itself")
+
+    def test_the_refresh_can_be_left_out(self):
+        updates._look(self.SITE, nudge=False)
+        self.assertEqual(self.wp.asked("load-update-core.php"), [])
+
+    def test_everything_runs_as_the_websites_own_user_with_its_home_for_wpcli_files(self):
+        updates._look(self.SITE)
+        for c in self.fake.called("su"):
+            self.assertEqual(c[:4], ["su", "-s", "/bin/bash", "auser"])
+            self.assertIn("export HOME=/home/a.example.com;", c[5], "WP-CLI's cache goes next to the site, never into the web folder")
+
+    def test_notices_printed_by_a_plugin_before_the_list_are_ignored(self):
+        _n, plugins, _c, _t, _v = updates._look(self.SITE)
+        self.assertTrue(plugins.startswith("name,title"))
+
+    def test_an_invisible_byte_order_mark_in_front_of_the_list_is_ignored(self):
+        """Found on the real server: one website printed U+FEFF before the header, so its list was thrown away."""
+        self.wp.vendor_plugins = "\ufeff" + self.wp.vendor_plugins
+        _n, plugins, _c, _t, vendors = updates._look(self.SITE)
+        self.assertTrue(vendors)
+        self.assertTrue(plugins.startswith("name,title"))
+        self.assertEqual(updates._csv("\ufeffname,title,status,version,update_version\n"), "name,title,status,version,update_version")
+
+    def test_if_the_plugins_cannot_be_loaded_the_wordpress_org_list_is_used_and_it_is_said(self):
+        self.wp.loaded_works = False
+        self.wp.repo_plugins = self.wp.HEADER + "woocommerce,WooCommerce,active,10.0,11.0\n"
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        self.assertFalse(vendors)
+        entry = updates.parse_site(name, plugins, core, themes, vendors)
+        self.assertTrue(entry["checked"])
+        self.assertFalse(entry["vendors"])
+        self.assertIn("woocommerce", [i.get("slug") for i in entry["items"]])
+
+    def test_a_website_without_an_administrator_still_gets_the_wordpress_org_list(self):
+        self.wp.admin = ""
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        self.assertFalse(vendors)
+        self.assertIsNotNone(plugins)
+        self.assertEqual(self.wp.asked("load-update-core.php"), [])
+
+    def test_a_website_that_cannot_start_is_unchecked(self):
+        self.fake.table.insert(0, (["su"], lambda cmd: (1, "")))
+        name, plugins, core, themes, vendors = updates._look(self.SITE)
+        self.assertEqual(updates.parse_site(name, plugins, core, themes, vendors), {"site": "a.example.com", "items": [], "checked": False})
+
+    def test_looking_at_one_website_stamps_when(self):
+        self.patch("cpsec.updates._wordpress_sites", return_value=[self.SITE])
+        entry = updates.look_one("a.example.com")
+        self.assertRegex(entry["looked"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        self.assertIsNone(updates.look_one("nope.example.com"))
 
 
 class RuleConverter(EnvTestCase):

@@ -620,7 +620,9 @@ class App:
         return _json(200, self.engine.updates_state())
 
     def api_updates_refresh(self, req, session):
-        return _result(self.engine.updates_refresh())
+        b = req.json()
+        site = _text(b.get("site"), 100) if isinstance(b, dict) else ""
+        return _result(self.engine.updates_refresh(site or None))
 
     # ------------------------------------------------------------------ settings
     def api_settings(self, req, session):

@@ -478,6 +478,16 @@ class AdvisorAndSetup(PanelCase):
         log = self.request("GET", "/api/activity")[1]["events"]
         self.assertTrue(any(e["event"] == "WP_UPDATE_START" for e in log))
 
+    def test_one_website_can_be_looked_at_again(self):
+        self.request("POST", "/api/updates/refresh", {})
+        state = self.request("GET", "/api/updates")[1]
+        self.assertEqual(state["checking"], [])
+        self.assertTrue(all("looked" in s for s in state["sites"]))
+        self.assertTrue(self.request("POST", "/api/updates/refresh", {"site": "shop.example.com"})[1]["ok"])
+        resp, res = self.request("POST", "/api/updates/refresh", {"site": "nope.example.com"})
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["code"], "invalid")
+
     def test_careful_updates_are_marked_in_the_list(self):
         self.request("POST", "/api/updates/refresh", {})
         items = {i["slug"]: i for s in self.request("GET", "/api/updates")[1]["sites"] for i in s["items"]}

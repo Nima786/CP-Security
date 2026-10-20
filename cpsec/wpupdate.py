@@ -77,10 +77,47 @@ def _wp(site, php, args, timeout=300):
                   % (shlex.quote(site["home"]), shlex.quote(site["docroot"]), php, args), timeout)
 
 
-def _wp_full(site, php, args, timeout=120):
-    """Like _wp but with the plugins loaded (needed for commands a plugin adds, such as clearing the cache)."""
-    return _shell(site["user"], "export HOME=%s; cd %s && %s /usr/bin/wp %s 2>&1"
-                  % (shlex.quote(site["home"]), shlex.quote(site["docroot"]), php, args), timeout)
+def _wp_full(site, php, args, timeout=120, admin=None):
+    """Like _wp but with the plugins loaded (needed for commands a plugin adds, such as clearing the cache).
+    admin: the number of an administrator to act as. A plugin that gets its updates from its maker's own server only
+    offers them to somebody who is allowed to update."""
+    who = "--user=%d " % int(admin) if admin else ""
+    return _shell(site["user"], "export HOME=%s; cd %s && %s /usr/bin/wp %s%s 2>&1"
+                  % (shlex.quote(site["home"]), shlex.quote(site["docroot"]), php, who, args), timeout)
+
+
+def _admin_id(site, php):
+    rc, out = _wp(site, php, "user list --role=administrator --field=ID --number=1", 60)
+    for line in reversed((out or "").strip().splitlines()):
+        if rc == 0 and line.strip().isdigit():
+            return int(line.strip())
+    return None
+
+
+LICENCE_RE = re.compile(r"unauthori[sz]ed|licen[cs]e|forbidden|\b40[13]\b|expired", re.I)
+
+
+def reason(out):
+    """Why WP-CLI's update failed, in its own words. The cause is usually on a 'Warning:' line (the download was refused);
+    the 'Error:' line only says 'No plugins updated'. The website's language may not be English: show the line as it is."""
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    warnings = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("Warning:")]
+    errors = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("Error")]
+    text = (warnings or errors or ["the update tool reported a failure"])[0]
+    if LICENCE_RE.search(text):
+        text += " \u2013 this usually means the plugin's licence is not active for this website"
+    return text
+
+
+def _clear_maintenance(site):
+    """A killed or crashed update can leave WordPress's 'upgrading' marker behind, which keeps the website in maintenance mode."""
+    path = shlex.quote(site["docroot"] + "/.maintenance")
+    _shell(site["user"], "test -f %s && grep -q upgrading %s && rm -f %s; true" % (path, path, path), 30)
+
+
+def _current(site, php, kind, slug):
+    rc, out = _wp(site, php, "%s get %s --field=version" % (kind, shlex.quote(slug)), 90)
+    return _version(out) if rc == 0 else ""
 
 
 def _version(text):
@@ -208,14 +245,24 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         if not ok:
             result["notes"].append(note)
 
-    rc, out = _wp(site, php, "%s update %s" % (kind, shlex.quote(slug)), 600)
+    command = "%s update %s" % (kind, shlex.quote(slug))
+    rc, out = _wp(site, php, command, 600)
     errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
-    rc2, out2 = _wp(site, php, "%s get %s --field=version" % (kind, shlex.quote(slug)), 90)
-    new = _version(out2) if rc2 == 0 else ""
+    new = _current(site, php, kind, slug)
+    own_server = False
+    if rc == 0 and not errors and new == old:
+        # WordPress.org knows nothing about it. A plugin that updates from its maker's own server only says so once it is
+        # loaded and an administrator is asking, which is what the website's own Updates page does. Try that way once.
+        admin = _admin_id(site, php)
+        if admin:
+            rc, out = _wp_full(site, php, command, 600, admin)
+            errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("Error")]
+            new = _current(site, php, kind, slug)
+            own_server = new != old
     result["to"] = new
     if rc != 0 or errors or not new:
-        reason = errors[0].replace("Error:", "").strip() if errors else "the update tool reported a failure"
-        result["message"] = "The update failed (%s). The website stays on version %s." % (reason[:160], old)
+        result["message"] = "The update failed (%s). The website stays on version %s." % (reason(out)[:220], old)
+        _clear_maintenance(site)
         _restore_if_changed(site, path, copy, result, domain, before)
         return result
     if new == old:
@@ -235,6 +282,8 @@ def update_one(domain, kind, slug, db_saved=False, stamp=None):
         return result
     result["ok"] = True
     result["message"] = "Updated from %s to %s. The website still answers normally." % (old, new)
+    if own_server:
+        result["message"] += " (This one updates from its maker's own server, not from WordPress.org.)"
     _wp_full(site, php, "litespeed-purge all", 60)                    # ignored if the cache plugin is not there
     _clean_old_copies(site, kind, slug)
     return result
@@ -255,7 +304,7 @@ def _restore_if_changed(site, path, copy, result, domain, before):
 
 # ----------------------------------------------------------------------------- the background job
 _lock = threading.Lock()
-_job = {"status": "idle", "items": [], "started": "", "finished": "", "stop": False}
+_job = {"status": "idle", "phase": "", "items": [], "started": "", "finished": "", "stop": False}
 
 
 def state():
@@ -296,7 +345,7 @@ def start(items, titles=None, on_item=None, on_done=None):
         if _job["status"] == "running":
             return Result(False, "Updates are already running. Wait for them to finish.", "busy")
         titles = titles or {}
-        _job.update(status="running", started=time.strftime("%Y-%m-%d %H:%M:%S"), finished="", stop=False,
+        _job.update(status="running", phase="updating", started=time.strftime("%Y-%m-%d %H:%M:%S"), finished="", stop=False,
                     items=[dict(i, title=titles.get((i["site"], i["kind"], i["slug"]), i["slug"]), status="waiting",
                                 message="", **{"from": "", "to": ""}) for i in clean])
     threading.Thread(target=_run, args=(on_item, on_done), daemon=True).start()
@@ -345,11 +394,16 @@ def _run(on_item=None, on_done=None):
                 except Exception:
                     pass
     finally:
-        with _lock:
-            _job["status"] = "done"
-            _job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        # The list of what is still waiting is read again BEFORE the job counts as finished. Otherwise the page, which
+        # fetches that list the moment it sees "finished", would get the old list and still show what was just updated.
         if on_done:
+            with _lock:
+                _job["phase"] = "checking"
             try:
                 on_done(sorted(touched))
             except Exception:
                 pass
+        with _lock:
+            _job["status"] = "done"
+            _job["phase"] = ""
+            _job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")

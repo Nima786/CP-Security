@@ -23,6 +23,8 @@ class FakeWordPress:
         self.login_code = "200"
         self.home_down_before = False
         self.saved = {}                     # copy path -> version when it was saved
+        self.admin = ""                     # the administrator's number, as WP-CLI would print it
+        self.own_server = set()             # keys WordPress.org knows nothing about: only found when plugins are loaded
 
     def key_in(self, script):
         for kind in ("plugin", "theme"):
@@ -37,6 +39,8 @@ class FakeWordPress:
         self.script_log.append(script)
         if "core version" in script:
             return 0, "6.5.2\n"
+        if "user list" in script:
+            return 0, self.admin
         if "db export" in script:
             return (1, "Error: mysqldump missing") if self.db_fails else (0, "Success: Exported to file.")
         if " path" in script and ("plugin path" in script or "theme path" in script):
@@ -69,6 +73,8 @@ class FakeWordPress:
             return 0, "Warning: something noisy\n" + self.versions[key] + "\n"
         if key and " update " in script:
             mode = self.update_mode.get(key)
+            if key in self.own_server and "--skip-plugins" in script:
+                mode = "nochange"
             if mode == "fail":
                 return 1, "Error: Download failed. Invalid license.\n"
             if mode != "nochange":
@@ -363,3 +369,104 @@ class OldCopies(UpdateCase):
 
     def test_nothing_is_removed_when_there_are_three_or_fewer(self):
         self.assertEqual(self.run_prune(["plugin-woo-20261011-120000", "plugin-woo-20261012-120000"]), [])
+
+
+class UpdatesFromTheMakersOwnServer(UpdateCase):
+    """Plugins that are not on WordPress.org (WPCodeBox, BricksExtras...) only update when loaded and asked by an administrator."""
+
+    def update_scripts(self):
+        return [x for x in self.wp.script_log if " plugin update woo " in x + " "]
+
+    def test_it_is_tried_again_the_way_the_dashboard_does_and_that_works(self):
+        self.wp.own_server = {"plugin:woo"}
+        self.wp.admin = "5\n"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((r["from"], r["to"]), ("1.0", "1.1"))
+        self.assertIn("maker's own server", r["message"])
+        first, second = self.update_scripts()
+        self.assertIn("--skip-plugins", first)
+        self.assertNotIn("--skip-plugins", second)
+        self.assertIn("--user=5", second)
+
+    def test_a_normal_update_is_not_tried_twice(self):
+        self.wp.admin = "5\n"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertTrue(r["ok"])
+        self.assertEqual(len(self.update_scripts()), 1)
+        self.assertNotIn("maker's own server", r["message"])
+
+    def test_a_failure_is_not_tried_again(self):
+        self.wp.admin = "5\n"
+        self.wp.update_mode["plugin:woo"] = "fail"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertFalse(r["ok"])
+        self.assertEqual(len(self.update_scripts()), 1)
+
+    def test_without_an_administrator_it_says_nothing_changed(self):
+        self.wp.own_server = {"plugin:woo"}
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertFalse(r["ok"])
+        self.assertIn("Nothing changed", r["message"])
+        self.assertEqual(len(self.update_scripts()), 1)
+
+
+class TheListIsReadAgainBeforeTheJobIsFinished(UpdateCase):
+    """Reported by the owner: after an update the page still showed it. The page fetched the list the moment the job
+    said "finished", but the list was only read again after that."""
+
+    def test_the_job_is_not_finished_while_the_list_is_being_read_again(self):
+        seen = []
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo"}],
+                       on_done=lambda touched: seen.append((wpupdate.state()["status"], wpupdate.state()["phase"], touched)))
+        self.wait()
+        self.assertEqual(seen, [("running", "checking", [DOMAIN])])
+        st = wpupdate.state()
+        self.assertEqual((st["status"], st["phase"]), ("done", ""))
+
+    def test_the_list_is_up_to_date_the_moment_the_job_is_finished(self):
+        waiting = {"woo": True}
+
+        def read_again(touched):
+            time.sleep(0.15)                  # reading again takes a while
+            waiting["woo"] = False
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo"}], on_done=read_again)
+        for _ in range(500):
+            if wpupdate.state()["status"] == "done":
+                break
+            time.sleep(0.01)
+        self.assertFalse(waiting["woo"], "the page fetches the list as soon as it sees 'done'")
+
+    def test_a_crash_while_reading_again_still_finishes_the_job(self):
+        def boom(touched):
+            raise RuntimeError("boom")
+        wpupdate.start([{"site": DOMAIN, "kind": "plugin", "slug": "woo"}], on_done=boom)
+        self.wait()
+        self.assertEqual(wpupdate.state()["status"], "done")
+
+
+class WhyAnUpdateFailed(UpdateCase):
+    """Found on the real server: the cause is on a 'Warning:' line, the 'Error:' line only says 'No plugins updated'."""
+
+    def test_the_warning_with_the_cause_wins_over_the_generic_error(self):
+        out = ('Enabling Maintenance mode...\nDownloading update from https://example.com/package/...\n'
+               'Warning: Download failed. "Unauthorized"\nDisabling Maintenance mode...\n'
+               'name\told_version\tnew_version\tstatus\nbricksextras\t1.5.3\t1.7.6\tError\nError: No plugins updated (1 failed).\n')
+        text = wpupdate.reason(out)
+        self.assertIn('Download failed. "Unauthorized"', text)
+        self.assertNotIn("No plugins updated", text)
+        self.assertIn("licence is not active", text, "an 'Unauthorized' answer is explained in plain words")
+
+    def test_only_an_error_line_is_used_when_there_is_no_warning(self):
+        self.assertEqual(wpupdate.reason("Error: Could not create directory."), "Could not create directory.")
+
+    def test_something_is_always_said(self):
+        self.assertEqual(wpupdate.reason(""), "the update tool reported a failure")
+
+    def test_a_failed_update_shows_the_reason_and_clears_a_leftover_upgrade_marker(self):
+        self.wp.update_mode["plugin:woo"] = "fail"
+        r = wpupdate.update_one(DOMAIN, "plugin", "woo")
+        self.assertFalse(r["ok"])
+        self.assertIn("Invalid license", r["message"])
+        self.assertTrue(any(".maintenance" in s for s in self.wp.script_log), "a marker left by a killed update would keep the site in maintenance mode")
+        self.assertTrue(all(".maintenance" not in s or s.startswith("test -f") for s in self.wp.script_log))

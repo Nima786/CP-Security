@@ -117,3 +117,15 @@ Things that cost hours to discover. They explain several design choices, so they
   (`lsphp81` here for old sites, `lsphp83` for new ones): the system `php` is often the wrong version.
 * Proved on a real server with a test site: update, check, simulated "site broke" (the old files went back and the version
   matched), a name that does not exist, a theme and an active plugin in one run (one database copy per website).
+* WP-CLI with `--skip-plugins` only knows what WordPress.org knows. A plugin that updates from its maker's own server
+  (plugin-update-checker, Easy Digital Downloads licensing and the like) adds its update only when it is loaded AND the
+  current user may update plugins, so ask with plugins loaded and `--user=<an administrator>`. Before reading, do what
+  Dashboard > Updates does: `do_action('load-update-core.php')` makes WordPress and those plugins check again (they allow
+  a check every minute on that page, instead of every 12 hours), without zeroing any of their stored state.
+* After `wp plugin update`, WordPress deletes its stored update list, so the next plain `plugin list --update=available`
+  shows nothing for the other plugins until somebody asks again. Always ask again (the line above) before reading.
+* One website printed U+FEFF (a byte-order mark from a stray file) in front of WP-CLI's CSV: strip it before looking for the header.
+* The website's language is not always English (`Warning:` is, the rest may be Persian): show the website's own line,
+  and match only on words like "Unauthorized" for a hint.
+* A page that fetches data the moment a background job says "finished" must find the data ready: finish the follow-up
+  work first, or the page shows the old state.

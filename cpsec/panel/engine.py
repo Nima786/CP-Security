@@ -34,6 +34,7 @@ class LiveEngine:
         self._advice_lock = threading.Lock()
         self._job_lock = threading.Lock()
         self._updates = util.read_json(config.P.updates_cache, {"status": "idle", "sites": [], "finished": ""})
+        self._checking = set()                      # websites that are being looked at again right now
         self.runner = provision.Runner()
         self.updater = selfupdate.Updater()
 
@@ -409,33 +410,62 @@ class LiveEngine:
         from . import activity
         activity.write("WP_UPDATE", site=item["site"], kind=item["kind"], slug=item["slug"], status=item["status"])
 
+    def _store_entry(self, entry):
+        """Put one website's fresh entry into the saved list."""
+        with self._job_lock:
+            sites_list = [s for s in self._updates.get("sites", []) if s["site"] != entry["site"]] + [entry]
+            self._updates = dict(self._updates, sites=sorted(sites_list, key=lambda s: s["site"]))
+            state = self._updates
+        try:
+            util.write_json(config.P.updates_cache, state)
+        except OSError:
+            pass
+
     def _wpupdate_done(self, touched):
-        """Look at the websites again so the list shows what is still waiting."""
+        """Look at the websites again so the list shows what is still waiting. The job is not "finished" until this returns."""
         for name in touched:
             entry = updates.look_one(name)
-            if entry is None:
-                continue
-            with self._job_lock:
-                sites_list = [s for s in self._updates.get("sites", []) if s["site"] != name] + [entry]
-                self._updates = dict(self._updates, sites=sorted(sites_list, key=lambda s: s["site"]))
-                state = self._updates
-            try:
-                util.write_json(config.P.updates_cache, state)
-            except OSError:
-                pass
+            if entry is not None:
+                self._store_entry(entry)
 
     # ------------------------------------------------------------------ updates (read-only, slow: runs in the background)
     def updates_state(self):
         with self._job_lock:
-            return copy.deepcopy(self._updates)
+            state = copy.deepcopy(self._updates)
+            state["checking"] = sorted(self._checking)
+            return state
 
-    def updates_refresh(self):
+    def updates_refresh(self, site=None):
+        """Look at every website again, or only at `site` (fast: a few seconds)."""
+        if site:
+            return self._updates_refresh_site(site)
         with self._job_lock:
-            if self._updates.get("status") == "running":
+            if self._updates.get("status") == "running" or self._checking:
                 return Result(False, "Already looking.", "busy")
             self._updates = dict(self._updates, status="running", started=time.strftime("%Y-%m-%d %H:%M:%S"))
         threading.Thread(target=self._updates_job, daemon=True).start()
         return Result(True, "Started looking for updates.")
+
+    def _updates_refresh_site(self, site):
+        if site not in {name for _docroot, _user, name in updates._wordpress_sites()}:
+            return Result(False, "That is not a WordPress website on this server.", "invalid")
+        with self._job_lock:
+            if self._updates.get("status") == "running" or site in self._checking:
+                return Result(False, "Already looking.", "busy")
+            self._checking.add(site)
+        threading.Thread(target=self._updates_site_job, args=(site,), daemon=True).start()
+        return Result(True, "Looking at %s again." % site)
+
+    def _updates_site_job(self, site):
+        entry = None
+        try:
+            entry = updates.look_one(site)
+        except Exception:                             # a failed look must never take the panel down
+            pass
+        if entry is not None:
+            self._store_entry(entry)
+        with self._job_lock:
+            self._checking.discard(site)
 
     def _updates_job(self):
         try:
@@ -1071,7 +1101,7 @@ class DemoEngine:
     def wpupdate_state(self):
         job = self.wp_job
         if not job:
-            return {"status": "idle", "items": [], "started": "", "finished": "", "stop": False,
+            return {"status": "idle", "phase": "", "items": [], "started": "", "finished": "", "stop": False,
                     "counts": {k: 0 for k in ("waiting", "working", "done", "failed", "restored", "skipped")}}
         elapsed = time.time() - job["started"]
         for n, it in enumerate(job["items"]):
@@ -1095,27 +1125,36 @@ class DemoEngine:
                 s["items"] = [i for i in s["items"] if (s["site"], i["kind"], i.get("slug", "")) not in done]
         out = copy.deepcopy(job)
         out["stop"] = job["stop_at"] is not None
+        out["phase"] = "" if job["finished"] else "updating"
         out["status"] = "done" if job["finished"] else "running"
         out["counts"] = {k: sum(1 for i in out["items"] if i["status"] == k) for k in ("waiting", "working", "done", "failed", "restored", "skipped")}
         return out
 
     def updates_state(self):
-        return copy.deepcopy(self.updates)
+        return dict(copy.deepcopy(self.updates), checking=[])
 
-    def updates_refresh(self):
+    def updates_refresh(self, site=None):
+        if site:
+            for s in self.updates["sites"]:
+                if s["site"] == site:
+                    s["looked"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    return Result(True, "Looking at %s again." % site)
+            return Result(False, "That is not a WordPress website on this server.", "invalid")
         def item(what, slug, kind, now, to, status="active"):
             return {"what": what, "slug": slug, "from": now, "to": to, "kind": kind, "status": status,
                     "careful": updates.is_careful(slug, what)}
         self.updates = {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S"), "sites": [
-            {"site": "shop.example.com", "checked": True, "items": [
+            {"site": "shop.example.com", "checked": True, "vendors": True, "items": [
                 item("WooCommerce", "woocommerce", "plugin", "10.0.4", "11.2.1"),
                 item("Yoast SEO", "wordpress-seo", "plugin", "28.2", "28.7"),
                 item("Bricks", "bricks", "theme", "1.9.8", "1.12.4")]},
-            {"site": "blog.example.com", "checked": True, "items": [
+            {"site": "blog.example.com", "checked": True, "vendors": True, "items": [
                 item("WordPress itself", "", "core-minor", "", "6.8.11"),
                 item("WooCommerce", "woocommerce", "plugin", "10.1.0", "11.2.1"),
                 item("Old gallery plugin", "old-gallery", "plugin", "2.1", "2.4", "inactive")]},
-            {"site": "staging.example.com", "checked": True, "items": [
+            {"site": "staging.example.com", "checked": True, "vendors": False, "items": [
                 item("Bricks", "bricks", "theme", "1.9.8", "1.12.4", "inactive")]},
             {"site": "example.org", "checked": False, "items": []}]}
+        for entry in self.updates["sites"]:
+            entry["looked"] = self.updates["finished"]
         return Result(True, "Started looking for updates.")
