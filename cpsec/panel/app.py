@@ -151,6 +151,9 @@ class App:
             ("POST", "/api/logins/remove"): (self.api_logins_remove, True),
             ("POST", "/api/logins/user"): (self.api_logins_user, True),
             ("POST", "/api/logins/open"): (self.api_logins_open, True),
+            ("GET", "/api/copies"): (self.api_copies, True),
+            ("POST", "/api/copies/delete"): (self.api_copies_delete, True),
+            ("POST", "/api/copies/keep"): (self.api_copies_keep, True),
             ("GET", "/api/uploads"): (self.api_uploads, True),
             ("POST", "/api/uploads/delete"): (self.api_uploads_delete, True),
             ("POST", "/api/uploads/scan"): (self.api_uploads_scan, True),
@@ -710,6 +713,25 @@ class App:
         res, url = self.engine.logins_open(site, to)
         activity.write("ADMIN_LOGIN_OPEN", ip=req.ip, site=site, ok=res.ok, code=res.code)
         return _result(res, url=url)
+
+    # ------------------------------------------------------------------ the copies saved before each update
+    def api_copies(self, req, session):
+        return _json(200, self.engine.copies_state())
+
+    def api_copies_delete(self, req, session):
+        b = req.json()
+        if b.get("confirmed") is not True:
+            return _json(409, {"ok": False, "code": "needs_confirm", "message": "Please confirm."})
+        names = _website_list(b)
+        res = self.engine.copies_delete(names)
+        activity.write("COPIES_DELETE", ip=req.ip, count="all" if names is None else len(names), ok=res.ok)
+        return _result(res)
+
+    def api_copies_keep(self, req, session):
+        b = req.json()
+        res = self.engine.copies_keep(b.get("keep"))
+        activity.write("COPIES_KEEP", ip=req.ip, keep=b.get("keep") if res.ok else "", ok=res.ok)
+        return _result(res)
 
     # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
     def api_uploads(self, req, session):

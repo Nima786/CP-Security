@@ -12,6 +12,8 @@ DEFAULTS = {
     # "login":   anybody can reach the login page; it still needs a password and a 6-digit code
     # "trusted": only the trusted addresses can reach the panel at all
     "access": "login",
+    # how many saved copies of each plugin, theme and database are kept after an update (1 to 5)
+    "copies_keep": 3,
 }
 
 _lock = threading.Lock()

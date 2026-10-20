@@ -23,13 +23,15 @@ import secrets
 import shlex
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
-from . import config, library, updates, util
+from . import config, library, settings, updates, util
 from .util import Result
 
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 KINDS = ("plugin", "theme")
-KEEP_COPIES = 3
+KEEP_COPIES = 3                      # the default; the owner can choose 1 to MAX_KEEP on the WP Updates page
+MAX_KEEP = 5
 MAX_ITEMS = 100
 FATAL = ("There has been a critical error", "Fatal error", "Parse error", "Uncaught ", "Call to undefined",
          "Allowed memory size", "Maximum execution time")
@@ -185,7 +187,7 @@ def _prune(site, pattern):
     d = site["home"] + "/cps-backups"
     rc, out = _shell(site["user"], "ls -1 %s 2>/dev/null" % shlex.quote(d), 30)
     names = sorted((n for n in out.splitlines() if re.match(pattern, n)), reverse=True)
-    old = names[KEEP_COPIES:]
+    old = names[keep_copies():]
     if old:
         _shell(site["user"], "cd %s && rm -rf -- %s" % (shlex.quote(d), " ".join(shlex.quote(n) for n in old)), 120)
 
@@ -198,8 +200,117 @@ def save_database(site, php, stamp):
     """One copy of the website's database in the website's own backup folder. Returns (ok, note)."""
     d = site["home"] + "/cps-backups"
     rc, out = _wp(site, php, "db export %s/db-%s.sql" % (shlex.quote(d), stamp), 900)
+    if rc == 0:                                       # a database copy holds everything the website knows: only its own user may read it
+        _shell(site["user"], "chmod 600 -- %s" % shlex.quote("%s/db-%s.sql" % (d, stamp)), 30)
     _prune(site, r"^db-\d{8}-\d{6}\.sql$")
     return rc == 0, "" if rc == 0 else "the database copy could not be made"
+
+
+# ----------------------------------------------------------------------------- the copies saved before each update
+COPY_ITEM_RE = re.compile(r"^(plugin|theme)-([A-Za-z0-9][A-Za-z0-9._-]*)-(\d{8})-(\d{6})$")
+COPY_DB_RE = re.compile(r"^db-(\d{8})-(\d{6})\.sql$")
+
+
+def keep_copies():
+    """How many saved copies of each plugin, theme and database are kept (the owner's choice, 1 to MAX_KEEP)."""
+    try:
+        n = int(settings.load().get("copies_keep", KEEP_COPIES))
+    except (TypeError, ValueError):
+        n = KEEP_COPIES
+    return max(1, min(MAX_KEEP, n))
+
+
+def set_keep(n):
+    if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= MAX_KEEP:
+        return Result(False, "Choose a number from 1 to %d." % MAX_KEEP, "invalid")
+    settings.save({"copies_keep": n})
+    return Result(True, "From the next update on, the newest %s of each plugin, theme and database %s kept. Copies that are already saved stay "
+                        "until you delete them here." % ("copy" if n == 1 else "%d copies" % n, "is" if n == 1 else "are"))
+
+
+def _all_sites():
+    return [({"docroot": d, "user": u, "home": os.path.dirname(d)}, name) for d, u, name in updates._wordpress_sites()]
+
+
+def _when(day, clock):
+    return "%s-%s-%s %s:%s" % (day[:4], day[4:6], day[6:], clock[:2], clock[2:4])
+
+
+def copies(site):
+    """The copies the panel saved for one website, newest first: [{'name', 'kind', 'what', 'when', 'kb'}].
+
+    Only names the panel itself makes are listed (and so only those can ever be removed): anything else the owner keeps in the
+    same folder is left alone."""
+    d = site["home"] + "/cps-backups"
+    script = ('cd %s 2>/dev/null || exit 0; for n in *; do [ -e "$n" ] || continue; '
+              'printf "%%s\\t%%s\\n" "$(du -sk -- "$n" | cut -f1)" "$n"; done' % shlex.quote(d))
+    rc, out = _shell(site["user"], script, 120)
+    found = []
+    for line in out.splitlines():
+        kb, _, name = line.partition("\t")
+        if not kb.strip().isdigit() or not name:
+            continue
+        m = COPY_ITEM_RE.match(name)
+        if m:
+            found.append((m.group(3) + m.group(4), {"name": name, "kind": m.group(1), "what": m.group(2), "when": _when(m.group(3), m.group(4)), "kb": int(kb)}))
+            continue
+        m = COPY_DB_RE.match(name)
+        if m:
+            found.append((m.group(1) + m.group(2), {"name": name, "kind": "database", "what": "Database", "when": _when(m.group(1), m.group(2)), "kb": int(kb)}))
+    return [item for _order, item in sorted(found, key=lambda x: x[0], reverse=True)]
+
+
+def copies_state():
+    """For the WP Updates page: the saved copies, website by website (only websites that have some)."""
+    try:
+        found = _all_sites()
+    except (ImportError, OSError):                  # not a server with websites on it
+        found = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        listed = list(ex.map(lambda pair: (pair[1], copies(pair[0])), found))
+    rows = [{"site": name, "count": len(items), "kb": sum(i["kb"] for i in items), "newest": items[0]["when"], "items": items}
+            for name, items in sorted(listed, key=lambda x: x[0]) if items]
+    return {"keep": keep_copies(), "max_keep": MAX_KEEP, "sites": rows, "count": sum(r["count"] for r in rows), "kb": sum(r["kb"] for r in rows)}
+
+
+def size_text(kb):
+    return "%.1f MB" % (kb / 1024.0) if kb >= 1024 else "%d KB" % max(1, kb)
+
+
+def copies_remove(names=None):
+    """Delete the saved copies of some websites (None = all). Websites themselves are not touched, only the copies in their backup folder."""
+    if state()["status"] == "running":
+        return Result(False, "Updates are running now. Wait for them to finish: the copies are what puts a website back if an update fails.", "busy")
+    try:
+        found = _all_sites()
+    except (ImportError, OSError):
+        found = []
+    known = {name for _site_, name in found}
+    if names is not None and (not names or any(n not in known for n in names)):
+        return Result(False, "Choose websites that are on this server.", "invalid")
+    removed, freed, websites, failed = 0, 0, 0, []
+    for site, name in found:
+        if names is not None and name not in names:
+            continue
+        items = copies(site)
+        if not items:
+            continue
+        q = shlex.quote
+        _shell(site["user"], "cd %s && rm -rf -- %s" % (q(site["home"] + "/cps-backups"), " ".join(q(i["name"]) for i in items)), 600)
+        left = {i["name"] for i in copies(site)}
+        gone = [i for i in items if i["name"] not in left]
+        if len(gone) < len(items):
+            failed.append(name)
+        if gone:
+            removed += len(gone)
+            freed += sum(i["kb"] for i in gone)
+            websites += 1
+    if not removed and not failed:
+        return Result(False, "There are no saved copies to delete.", "none")
+    message = "Deleted %d saved cop%s (%s) from %d website%s." % (removed, "y" if removed == 1 else "ies", size_text(freed), websites, "" if websites == 1 else "s")
+    if failed:
+        return Result(False, message + " Some could not be deleted on: %s." % ", ".join(failed), "partial")
+    return Result(True, message)
 
 
 def update_one(domain, kind, slug, db_saved=False, stamp=None, progress=None, upload=None):

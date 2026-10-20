@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads", "/api/logins",
+                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1187,3 +1187,79 @@ class OneClickLoginOnTheRealEngine(PanelCase):
         resp, data = self.request("POST", "/api/logins/install", {"domains": ["a.example.com"], "confirmed": True})
         self.assertFalse(data["ok"])
         self.start.assert_not_called()
+
+
+class SavedCopies(PanelCase):
+    """The copies saved before each update: what the WP Updates page shows and what its buttons do (on the made-up server)."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def copies(self):
+        return self.request("GET", "/api/copies")[1]
+
+    def test_the_page_gets_the_copies_website_by_website_with_totals(self):
+        resp, data = self.request("GET", "/api/copies")
+        self.assertEqual(resp.status, 200)
+        for key in ("keep", "max_keep", "sites", "count", "kb"):
+            self.assertIn(key, data)
+        self.assertEqual([s["site"] for s in data["sites"]], ["blog.example.com", "shop.example.com"])
+        self.assertEqual(data["count"], sum(s["count"] for s in data["sites"]))
+        shop = data["sites"][1]
+        for key in ("site", "count", "kb", "newest", "items"):
+            self.assertIn(key, shop)
+        self.assertEqual({i["kind"] for i in shop["items"]}, {"plugin", "theme", "database"})
+
+    def test_deleting_needs_an_explicit_yes(self):
+        resp, data = self.request("POST", "/api/copies/delete", {"domains": ["blog.example.com"]})
+        self.assertEqual((resp.status, data["code"]), (409, "needs_confirm"))
+        self.assertEqual(self.copies()["count"], 6)
+        self.assertEqual(self.request("POST", "/api/copies/delete", {"domains": ["blog.example.com"], "confirmed": "yes"})[0].status, 409)
+
+    def test_the_copies_of_one_website_can_be_deleted(self):
+        resp, data = self.request("POST", "/api/copies/delete", {"domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertIn("Deleted 2 saved copies", data["message"])
+        self.assertEqual([s["site"] for s in self.copies()["sites"]], ["shop.example.com"])
+
+    def test_all_the_copies_can_be_deleted_and_a_second_time_there_is_nothing(self):
+        resp, data = self.request("POST", "/api/copies/delete", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual((self.copies()["count"], self.copies()["sites"]), (0, []))
+        resp, data = self.request("POST", "/api/copies/delete", {"all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+
+    def test_websites_must_be_named_or_all_and_must_exist(self):
+        for body in ({"confirmed": True}, {"domains": [], "confirmed": True}, {"domains": "blog.example.com", "confirmed": True}):
+            self.assertEqual(self.request("POST", "/api/copies/delete", body)[0].status, 400, body)
+        resp, data = self.request("POST", "/api/copies/delete", {"domains": ["nope.example.com"], "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "invalid"))
+        self.assertEqual(self.copies()["count"], 6)
+
+    def test_how_many_to_keep_can_be_chosen_from_one_to_five(self):
+        for n in (1, 5, 2):
+            resp, data = self.request("POST", "/api/copies/keep", {"keep": n})
+            self.assertEqual(resp.status, 200, data)
+            self.assertEqual(self.copies()["keep"], n)
+
+    def test_other_choices_are_refused(self):
+        self.request("POST", "/api/copies/keep", {"keep": 2})
+        for bad in (0, 6, -3, "3", None, True, 2.5, [2]):
+            resp, data = self.request("POST", "/api/copies/keep", {"keep": bad})
+            self.assertEqual((resp.status, data["code"]), (400, "invalid"), bad)
+        self.assertEqual(self.copies()["keep"], 2)
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        self.assertEqual(self.request("POST", "/api/copies/delete", {"all": True, "confirmed": True})[0].status, 403)
+        self.assertEqual(self.request("POST", "/api/copies/keep", {"keep": 1})[0].status, 403)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/copies")[0].status, 401)
+
+    def test_deleting_and_the_choice_are_written_to_the_activity_log(self):
+        self.request("POST", "/api/copies/keep", {"keep": 2})
+        self.request("POST", "/api/copies/delete", {"all": True, "confirmed": True})
+        names = [e["event"] for e in self.request("GET", "/api/activity")[1]["events"]]
+        self.assertIn("COPIES_KEEP", names)
+        self.assertIn("COPIES_DELETE", names)

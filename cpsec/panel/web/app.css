@@ -355,3 +355,21 @@ tr.updating td { background: var(--surface-2); }
   .lr-actions { justify-content: stretch; }
   .lr-actions .btn { flex: 1 1 0; min-width: 0; }
 }
+
+/* ---------- the copies saved before each update ---------- */
+.copies-intro { padding: 1rem 1.25rem; }
+.copies-intro p:last-child { margin-bottom: 0; }
+.copies-keep { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.copies-keep label { font-weight: 600; }
+.pick.narrow { width: 5.5rem; }
+@media (max-width: 720px) { .copies-intro { padding: .9rem 1rem; } }
+@media (max-width: 600px) {
+  /* the saved copies: the website and its button on top, three short lines under it */
+  .copies-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .6rem; row-gap: .1rem; align-items: center; }
+  .copies-table td { grid-column: 1; font-size: .88rem; color: var(--muted); }
+  .copies-table td::before { content: none; }
+  .copies-table td:nth-child(1) { grid-row: 1; font-size: 1rem; color: var(--text); }
+  .copies-table td:nth-child(3)::before { content: "Size: "; display: inline; font-size: inherit; font-weight: 400; letter-spacing: 0; text-transform: none; color: inherit; }
+  .copies-table td:nth-child(4)::before { content: "Newest: "; display: inline; font-size: inherit; font-weight: 400; letter-spacing: 0; text-transform: none; color: inherit; }
+  .copies-table td:nth-child(5) { grid-column: 2; grid-row: 1 / 4; justify-self: end; padding: 0; }
+}

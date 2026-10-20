@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.3
+* **See, limit and delete the copies saved before updates.** New card "Saved copies" at the bottom of the WP Updates page. Before each
+  update the panel keeps a copy of the plugin or theme and, once per website, of the database, in the website's own private backup
+  folder. They were only visible in a file manager. Now the page shows, website by website, how many there are, how big they are and
+  when the newest was made, and each website has a **Delete** button (plus **Delete all**), with a plain explanation first. Only the
+  copies the panel itself made are ever listed or deleted: anything else you keep in that folder is left alone. Nothing is deleted while
+  updates are running, because those copies are what puts a website back if an update fails. The websites themselves are never changed.
+* **Choose how many copies are kept** (1 to 5, it was always 3). It applies from the next update on, and copies already saved stay
+  until you delete them. The Activity log records both the choice and every deletion.
+* **Database copies are now private to the website's own user.** A new database copy is saved so that only that user can read it
+  (it was readable by the user's group and others; the backup folder itself was already closed to everybody else).
 ## 0.9.2
 * **"Open admin" on the WP Updates page.** Every website card there now has an **Open admin** button next to "Check again" when that
   website has the one-click login set up, so you can jump into its dashboard from the page where you are working. It signs in as the

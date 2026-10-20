@@ -513,6 +513,16 @@ class LiveEngine:
     def logins_open(self, site, to=""):
         return adminlogin.make_link(site, to)
 
+    # ------------------------------------------------------------------ the copies saved before each update
+    def copies_state(self):
+        return wpupdate.copies_state()
+
+    def copies_delete(self, names):
+        return wpupdate.copies_remove(names)
+
+    def copies_keep(self, n):
+        return wpupdate.set_keep(n)
+
     # ------------------------------------------------------------------ plugin and theme files uploaded by the owner
     def upload_dir(self):
         library.prepare()
@@ -653,6 +663,10 @@ class DemoEngine:
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
         self.login_helper, self.login_choice = {"shop.example.com": "installed", "staging.example.com": "changed"}, {}
         self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
+        self.copy_keep = 3                                    # saved copies from earlier updates (kind, name, time stamp, size in KB)
+        self.copy_data = {"shop.example.com": [("plugin", "woocommerce", "20261019-093000", 31200), ("plugin", "woocommerce", "20261012-081500", 30900),
+                                               ("theme", "bricks", "20261012-081500", 9800), ("database", "", "20261019-093000", 18400)],
+                          "blog.example.com": [("plugin", "yoast-seo", "20261017-141000", 14200), ("database", "", "20261017-141000", 4100)]}
         self.up_zips, self.up_installed = [], {}              # uploaded plugin and theme files, and what the websites have after an update
         self.fw_enabled, self.fw_rules, self.fw_next, self.fw_pending_until, self.fw_previous = False, [], 1, 0.0, None
         self.wp_job = None
@@ -1320,6 +1334,33 @@ class DemoEngine:
         if self.login_helper.get(site) != "installed":
             return Result(False, "The helper is not installed (or was changed) on this website. Install it first.", "not_installed"), ""
         return Result(True, "Opening %s as %s." % (site, self.login_choice.get(site) or self.DEMO_ADMINS[site][0]["login"])), "https://%s/?cps-login=demo-link" % site
+
+    def copies_state(self):
+        rows = []
+        for site in sorted(self.copy_data):
+            items = [{"name": ("db-%s.sql" % stamp) if kind == "database" else "%s-%s-%s" % (kind, what, stamp), "kind": kind, "what": what or "Database",
+                      "when": wpupdate._when(*stamp.split("-")), "kb": kb} for kind, what, stamp, kb in sorted(self.copy_data[site], key=lambda c: c[2], reverse=True)]
+            if items:
+                rows.append({"site": site, "count": len(items), "kb": sum(i["kb"] for i in items), "newest": items[0]["when"], "items": items})
+        return {"keep": self.copy_keep, "max_keep": wpupdate.MAX_KEEP, "sites": rows, "count": sum(r["count"] for r in rows), "kb": sum(r["kb"] for r in rows)}
+
+    def copies_delete(self, names):
+        targets = [n for n in self.copy_data if names is None or n in names]
+        if names is not None and (not names or any(n not in self.DEMO_SITES for n in names)):
+            return Result(False, "Choose websites that are on this server.", "invalid")
+        count = sum(len(self.copy_data[n]) for n in targets)
+        kb = sum(c[3] for n in targets for c in self.copy_data[n])
+        if not count:
+            return Result(False, "There are no saved copies to delete.", "none")
+        for n in targets:
+            self.copy_data.pop(n)
+        return Result(True, "Deleted %d saved cop%s (%s) from %d website%s." % (count, "y" if count == 1 else "ies", wpupdate.size_text(kb), len(targets), "" if len(targets) == 1 else "s"))
+
+    def copies_keep(self, n):
+        res = wpupdate.set_keep(n)
+        if res.ok:
+            self.copy_keep = n
+        return res
 
     def wpupdate_start(self, items):
         if self.wp_job and not self.wp_job.get("finished"):

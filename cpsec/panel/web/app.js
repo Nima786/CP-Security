@@ -1244,6 +1244,32 @@
       partial.length ? h('div', { class: 'note', text: 'Only partly checked: ' + partial.map(s => s.site).join(', ') + '. A plugin on these websites would not load for the check, so updates that plugin makers send from their own servers (not WordPress.org) may be missing here. Look at them in WordPress.' }) : null);
   }
 
+  // ------------------------------------------------------------------ the copies saved before each update
+  function renderCopies(data, ctl) {
+    if (!data) return h('section', { class: 'card' }, h('h2', { text: 'Saved copies' }), h('p', { class: 'muted', text: 'Looking at the saved copies\u2026' }));
+    const sites = data.sites || [];
+    const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+    const kinds = items => ['plugin', 'theme', 'database'].map(k => items.filter(i => i.kind === k).length ? plural(items.filter(i => i.kind === k).length, k, k + 's') : '').filter(Boolean).join(', ');
+    const rows = sites.map(s => h('tr', {},
+      h('td', {}, h('strong', { text: s.site })),
+      h('td', { text: s.count + ' (' + kinds(s.items) + ')' }),
+      h('td', { text: sizeText(s.kb * 1024) }),
+      h('td', { text: s.newest }),
+      h('td', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', disabled: ctl.busy, 'aria-label': 'Delete the saved copies of ' + s.site, text: 'Delete', onclick: () => ctl.remove([s.site], s.count, s.kb) }))));
+    const keep = h('select', { id: 'copies-keep', disabled: ctl.busy, onchange: ev => ctl.setKeep(Number(ev.target.value)) },
+      Array.from({ length: data.max_keep || 5 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === data.keep, text: String(i + 1) })));
+    return h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'Saved copies' }),
+        badge(data.count ? plural(data.count, 'copy', 'copies') + ' \u00b7 ' + sizeText(data.kb * 1024) : 'none', data.count ? '' : 'ok'),
+        data.count ? h('button', { class: 'btn small danger right', type: 'button', disabled: ctl.busy, text: 'Delete all\u2026', onclick: () => ctl.remove(null, data.count, data.kb) }) : null),
+      h('div', { class: 'copies-intro' },
+        h('p', { text: 'Before each update the panel saves a copy of the plugin or theme being updated and, once per website, of the database. They are kept in each website\u2019s own private backup folder, so the old files can be put back if an update goes wrong. Deleting them frees space and does not change the websites, but you can then no longer go back to those versions.' }),
+        h('div', { class: 'copies-keep' }, h('label', { for: 'copies-keep', text: 'Keep the newest' }), h('span', { class: 'pick narrow' }, keep),
+          h('span', { text: data.keep === 1 ? 'copy of each plugin, theme and database.' : 'copies of each plugin, theme and database.' })),
+        h('p', { class: 'muted small', style: 'margin-top:.5rem', text: 'This applies from the next update on. Copies that are already saved stay until you delete them here.' })),
+      rows.length ? table(['Website', 'Copies', 'Size', 'Newest', ''], rows, '', 'copies-table') : h('div', { class: 'empty', text: 'No saved copies at the moment.' }));
+  }
+
   async function viewUpdates() {
     let state = (await api('/api/updates')).data;
     let job = (await api('/api/wpupdate')).data;
@@ -1252,6 +1278,23 @@
     const loadLogins = async () => { try { const r = await api('/api/logins'); if (r && r.data && r.data.sites) logins = r.data; } catch (e) { /* the page works without it */ } };
     await loadLogins();
     const uploadHolder = h('div', {}, null);
+    const copiesHolder = h('div', {}, null);
+    let copies = null;                       // read in the background: it looks into the backup folder of every website
+    let copiesBusy = null;
+    const copiesCtl = {
+      get busy() { return job.status === 'running' || !!starting; },
+      remove: async (names, count, kb) => {
+        const dlg = await dialog({ title: 'Delete the saved copies?', danger: true, ok: 'Delete the copies', content: h('div', {},
+          h('p', { text: count + ' saved cop' + (count === 1 ? 'y' : 'ies') + ' (' + sizeText(kb * 1024) + ') of ' + (names ? names[0] : 'every website') + ' will be deleted from the server.' }),
+          h('p', { class: 'muted small', text: 'The websites themselves are not touched. You will no longer be able to put back the plugin, theme or database versions that these copies hold.' })) });
+        if (!dlg) return;
+        await act('/api/copies/delete', names ? { domains: names, confirmed: true } : { all: true, confirmed: true });
+        await loadCopies();
+      },
+      setKeep: async n => { await act('/api/copies/keep', { keep: n }); await loadCopies(); },
+    };
+    const paintCopies = () => { copiesBusy = copiesCtl.busy; copiesHolder.replaceChildren(renderCopies(copies, copiesCtl)); };
+    const loadCopies = async () => { try { const r = await api('/api/copies'); if (r && r.data && r.data.sites) copies = r.data; } catch (e) { /* stays on "looking" */ } paintCopies(); };
     const ticks = {};                       // 'file id|website' -> chosen or not (what can be updated starts chosen)
     const seenFiles = new Set();
     const sending = [];                     // the files being sent right now, with their progress
@@ -1277,6 +1320,7 @@
         openAdmin: async site => { if (!await openAdminTab(site)) { await loadLogins(); paint(); } },
         uploadFor: (kind, slug, to) => (uploads.zips || []).find(z => z.kind === kind && z.slug === slug && cmpVersion(z.version, to || '0') >= 0) || null }));
       paintUploads();
+      if (copiesCtl.busy !== copiesBusy) paintCopies();
       // the tab itself shows it too, for when you are looking at something else
       if (job.status === 'running') document.title = '\u27f3 Updating ' + (job.counts.done + job.counts.failed + job.counts.restored + job.counts.skipped) + ' of ' + job.items.length + ' \u2013 CP-Security';
       else if (document.title.startsWith('\u27f3')) document.title = 'WP Updates \u2013 CP-Security';
@@ -1345,6 +1389,7 @@
         if (was === 'running' && job.status !== 'running') {
           state = (await api('/api/updates')).data;
           uploads = (await api('/api/uploads')).data;
+          loadCopies();
           clearInterval(S.pollTimer);
           toast(job.counts.failed + job.counts.restored ? 'Updates finished. Some need a look.' : 'Updates finished.', job.counts.failed + job.counts.restored ? 'bad' : 'ok');
         }
@@ -1416,10 +1461,12 @@
     paint();
     watchUploads();
     watchLogins();
+    paintCopies();
+    loadCopies();
     if (state.status === 'running') { button.disabled = true; poll(); } else if ((state.checking || []).length) pollChecking(); else if (job.status === 'running') watch();
     return h('div', { class: 'stack' },
       pageHead('WP Updates', 'Updates waiting for WordPress itself, plugins and themes, website by website. Nothing is updated unless you press an Update button: there are no automatic updates.', button),
-      jobHolder, uploadHolder, holder,
+      jobHolder, uploadHolder, holder, copiesHolder,
       h('div', { class: 'note', text: 'Updates of plugins and themes can be started here, one website at a time, with a copy saved first and a check afterwards. WordPress itself is updated in each website\u2019s own dashboard (Dashboard \u2192 Updates). A plugin marked "switched off" is not running, but its old files can still be attacked: delete it if you do not need it. Plugins that get their updates from their maker\u2019s own server (not WordPress.org) are included. If you updated something in WordPress yourself, press Check again on that website. Websites that have the one-click login set up show an Open admin button (set it up on the One-click login page).' }));
   }
   // ------------------------------------------------------------------ one-click login to the websites

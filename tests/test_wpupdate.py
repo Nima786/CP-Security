@@ -154,7 +154,7 @@ class OneUpdate(UpdateCase):
                  for s in self.wp.script_log]
         order = [o for o in order if o]
         self.assertEqual(order, ["copy", "db", "update"], "a copy of the files and the database come before the update")
-        self.assertTrue(all(s.startswith("export HOME=") or "mkdir" in s or "test " in s or "diff" in s or "ls -1" in s
+        self.assertTrue(all(s.startswith("export HOME=") or "mkdir" in s or "test " in s or "diff" in s or "ls -1" in s or s.startswith("chmod 600 --")
                             for s in self.wp.script_log), "everything runs as the website's user through su")
 
     def test_everything_runs_as_the_websites_own_user_never_as_root(self):
