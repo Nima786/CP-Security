@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.8
+* **Known holes** (new page): checks every website's plugins, themes and WordPress itself against a public list of known
+  security holes (the free WPVulnerability database, no account and no key), and shows which websites have a known hole, how
+  serious it is, and whether an update fixes it. Only names and version numbers are looked up; nothing about the websites is
+  shared. This is the kind of warning that would have flagged the plugin behind the October break-in before a bot found it.
+  * Websites are listed worst first, each hole with its severity, what it is, its public reference number, and either the
+    version that fixes it (update it on the WP Updates page) or "no fix yet" when there is none.
+  * What the database says is kept for a day, so a second look is instant; "Check from the database" asks again. A newly
+    fixed plugin is correctly shown as safe (the version that closed the hole and anything newer is never flagged).
+  * Checked on the real server (read-only): the fixed Bricksforge is not flagged, and real out-of-date plugins were found
+    (for example an old JetEngine and Perfmatters), each with the version that fixes it.
 ## 0.9.7
 * **Bot protection** (new page): three switches per website against what bots try on every WordPress website, every day. Each one
   shows, website by website, what a stranger can see right now, and is turned on per website or for all.

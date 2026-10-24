@@ -381,3 +381,14 @@ tr.updating td { background: var(--surface-2); }
   .copies-table td:nth-child(4)::before { content: "Newest: "; display: inline; font-size: inherit; font-weight: 400; letter-spacing: 0; text-transform: none; color: inherit; }
   .copies-table td:nth-child(5) { grid-column: 2; grid-row: 1 / 4; justify-self: end; padding: 0; }
 }
+
+/* ---------- known holes ---------- */
+.hole { padding: .85rem 1.25rem; border-top: 1px solid var(--line); }
+.hole-top { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.hole-top .site-name { font-size: 1rem; }
+.hole-list { margin: .5rem 0 0; }
+.hole-list li { margin: .35rem 0; }
+.sev-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.sev-dot.bad { background: var(--bad); } .sev-dot.warn { background: var(--warn); } .sev-dot.none { background: var(--line); }
+.clear-line svg { width: 1.3rem; height: 1.3rem; flex: none; color: var(--ok); }
+@media (max-width: 720px) { .hole { padding: .8rem 1rem; } }

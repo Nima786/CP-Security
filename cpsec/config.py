@@ -28,6 +28,8 @@ class Paths:
         self.tls_dir = self.conf_dir + "/tls"
         self.nft_file = self.conf_dir + "/admin-lock.nft"
         self.updates_cache = self.conf_dir + "/updates-cache.json"
+        self.vuln_cache = self.conf_dir + "/vuln-cache.json"                 # what the vulnerability database said, kept a day
+        self.sentry_state = self.conf_dir + "/sentry-state.json"            # what the daily watch found last time (to alert only on new things)
         self.adminlogin_file = self.conf_dir + "/adminlogin.json"            # the secret of each website's login helper (root only)
         self.upload_dir = j("/var/lib/cp-security/uploads")                  # plugin and theme zips the owner uploaded (root only)
         self.blocker_settings = self.conf_dir + "/blocker.json"

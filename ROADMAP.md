@@ -67,6 +67,7 @@ Rule for everything here: explained in plain words, shown on a page, and the own
 - ✅ One-click admin login: "Open admin" per website, a signed link that works once for one minute, through a small tested helper file installed only on request (works with custom login addresses; skips a website's own 2-step login)
 - ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)
 - ✅ Block PHP in uploads folders (per website, proved with a harmless test file, put back if the website gets worse)
+- ✅ Known-vulnerable plugin, theme and core check (free WPVulnerability database, cached a day, worst first, with the fixing version)
 - ✅ Bot protection: close the old app-login door (xmlrpc.php), hide private files (logs, dumps, backups, dotfiles), hide account names; per website, each proved before it is kept; the attack blocker also bans guessing at a closed app-login door
 - ⬜ Daily scan for backdoors and changed WordPress files
 - ⬜ Known-vulnerable plugin and theme check

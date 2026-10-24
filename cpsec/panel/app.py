@@ -151,6 +151,8 @@ class App:
             ("POST", "/api/logins/remove"): (self.api_logins_remove, True),
             ("POST", "/api/logins/user"): (self.api_logins_user, True),
             ("POST", "/api/logins/open"): (self.api_logins_open, True),
+            ("GET", "/api/vulns"): (self.api_vulns, True),
+            ("POST", "/api/vulns/scan"): (self.api_vulns_scan, True),
             ("GET", "/api/botguard"): (self.api_botguard, True),
             ("POST", "/api/botguard/scan"): (self.api_botguard_scan, True),
             ("POST", "/api/botguard/enable"): (self.api_botguard_enable, True),
@@ -721,6 +723,14 @@ class App:
         res, url = self.engine.logins_open(site, to)
         activity.write("ADMIN_LOGIN_OPEN", ip=req.ip, site=site, ok=res.ok, code=res.code)
         return _result(res, url=url)
+
+    # ------------------------------------------------------------------ known security holes
+    def api_vulns(self, req, session):
+        return _json(200, self.engine.vulns_state())
+
+    def api_vulns_scan(self, req, session):
+        res = self.engine.vulns_scan(refresh=req.json().get("refresh") is True)
+        return _result(res)
 
     # ------------------------------------------------------------------ bot protection
     def api_botguard(self, req, session):

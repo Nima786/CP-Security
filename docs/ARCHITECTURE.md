@@ -123,6 +123,13 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
   an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
   the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **Known holes (`vulns.py`).** Reads each website's plugin and theme list (as the site user, via `library._read_site`) plus the core
+  version, and asks the free WPVulnerability API (`/plugin/<slug>/`, `/theme/<slug>/`, `/core/<version>/`; no key, only names and
+  versions leave the server). A version is flagged when it falls inside a hole's `operator` range (min/max with ge/gt/le/lt);
+  the fixing version is the `lt` max. The API sends yes/no fields as the strings '0'/'1', so `unfixed`/booleans are read with a
+  string-aware test (a bare truth test reads '0' as true). CVSS score gives the severity. Answers are cached a day in
+  `vuln-cache.json`; a lookup that fails keeps yesterday's answer rather than dropping to nothing. Verified live that the fixed
+  Bricksforge is not flagged.
 * **Bot protection (`botguard.py`).** Three independent marked blocks (`# BEGIN CP-Security bot-<key>`) at the top of the website's
   root `.htaccess`, written as the site user through the same read/write/put-back helpers as `phpguard.py`. `xmlrpc`:
   `<Files "xmlrpc.php"> Require all denied`. `files`: a `FilesMatch` for logs, dumps, backup and editor copies, `wp-config.php.*`,

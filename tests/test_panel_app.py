@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard", "/api/botguard",
+                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard", "/api/botguard", "/api/vulns",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1514,3 +1514,44 @@ class BotGuardOnTheRealEngine(PanelCase):
         resp, data = self.request("POST", "/api/botguard/enable", {"rule": "xmlrpc", "domains": ["a.example.com"], "confirmed": True})
         self.assertFalse(data["ok"])
         self.start.assert_not_called()
+
+
+class KnownHolesPage(PanelCase):
+    """The Known holes page's routes, on the made-up server."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def test_the_page_lists_websites_worst_first_with_counts_and_totals(self):
+        resp, data = self.request("GET", "/api/vulns")
+        self.assertEqual(resp.status, 200)
+        for key in ("scan", "sites", "totals", "any_unasked"):
+            self.assertIn(key, data)
+        worst = data["sites"][0]
+        self.assertEqual(worst["site"], "shop.example.com")
+        self.assertEqual(worst["counts"]["critical"], 1)
+        self.assertEqual(worst["worst"], 4)
+        self.assertEqual(data["totals"]["critical"], 1)
+        shop = [s for s in data["sites"] if s["site"] == "shop.example.com"][0]
+        self.assertEqual(shop["items"][0]["slug"], "bricksforge")
+        self.assertEqual(shop["items"][0]["holes"][0]["fixed_version"], "2.1.1")
+        org = [s for s in data["sites"] if s["site"] == "example.org"][0]
+        self.assertFalse(org["checked"])
+
+    def test_a_clear_website_has_no_items(self):
+        rows = {s["site"]: s for s in self.request("GET", "/api/vulns")[1]["sites"]}
+        self.assertEqual(rows["staging.example.com"]["items"], [])
+        self.assertTrue(rows["staging.example.com"]["checked"])
+
+    def test_checking_again_runs_and_needs_the_secret_token(self):
+        resp, data = self.request("POST", "/api/vulns/scan", {})
+        self.assertTrue(data["ok"], data)
+        resp, data = self.request("POST", "/api/vulns/scan", {"refresh": True})
+        self.assertTrue(data["ok"], data)
+        self.csrf = ""
+        self.assertEqual(self.request("POST", "/api/vulns/scan", {})[0].status, 403)
+
+    def test_it_needs_a_session(self):
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/vulns")[0].status, 401)

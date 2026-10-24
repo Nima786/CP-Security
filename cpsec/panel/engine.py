@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from .. import (__version__, access, adminlogin, advisor, blocker, botguard, config, headers, health, htfile, library, netinfo, phpguard, ports, provision,
+from .. import (__version__, access, adminlogin, advisor, blocker, botguard, config, vulns, headers, health, htfile, library, netinfo, phpguard, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -521,6 +521,21 @@ class LiveEngine:
     def logins_open(self, site, to=""):
         return adminlogin.make_link(site, to)
 
+    # ------------------------------------------------------------------ known security holes
+    def _vuln_names(self):
+        try:
+            return vulns._names()
+        except (ImportError, OSError):                          # not a Linux server: there are no websites to list
+            return []
+
+    def vulns_state(self):
+        if vulns.scan_state()["status"] == "idle":              # first look after a restart of the panel
+            vulns.scan_start()
+        return vulns.state(self._vuln_names())
+
+    def vulns_scan(self, refresh=False):
+        return vulns.scan_start(refresh=bool(refresh))
+
     # ------------------------------------------------------------------ bot protection (three switches per website)
     def _botguard_names(self):
         try:
@@ -731,6 +746,7 @@ class DemoEngine:
         self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.guard_status = {"shop.example.com": "on", "staging.example.com": "changed", "blog.example.com": "off"}
         self.bot_status = {("shop.example.com", "xmlrpc"): "on", ("staging.example.com", "users"): "changed"}
+        self.vuln_scanned = False
         self.bot_seen = {"blog.example.com": {"open": True, "exposed": ["/wp-content/debug.log"], "shown": ["admin"]},
                          "staging.example.com": {"open": False, "exposed": [], "shown": ["dev"]},
                          "shop.example.com": {"open": False, "exposed": [], "shown": ["owner"]}}
@@ -1450,6 +1466,47 @@ class DemoEngine:
                         "items": [{"site": n, "status": "done", "step": "", "message": ("%s: on for %s, and tested." if action == "enable" else "%s: off for %s (as before).") % (title, n)} for n in names],
                         "counts": {"waiting": 0, "working": 0, "done": len(names), "failed": 0}}
         return Result(True, "Started on %d website%s." % (len(names), "" if len(names) == 1 else "s"))
+
+    def _demo_vuln_sites(self):
+        H = lambda name, sev, score, fix, fixed, cve: {"title": name, "severity": sev, "score": score, "fix": fix, "fixed_version": fixed, "cve": cve}
+        data = {
+            "shop.example.com": [
+                {"kind": "plugin", "slug": "bricksforge", "name": "Bricksforge", "version": "2.0.9", "status": "active",
+                 "holes": [H("Unauthenticated file upload", "critical", 9.8, "update", "2.1.1", "CVE-2026-85097"),
+                           H("Reflected cross-site scripting", "high", 7.5, "update", "2.1.1", "CVE-2026-85098")]},
+                {"kind": "plugin", "slug": "old-slider", "name": "Old Slider", "version": "3.1", "status": "inactive",
+                 "holes": [H("SQL injection", "high", 8.2, "none", "", "CVE-2025-40001")]}],
+            "blog.example.com": [
+                {"kind": "theme", "slug": "legacy-theme", "name": "Legacy Theme", "version": "1.2", "status": "active",
+                 "holes": [H("Stored cross-site scripting", "medium", 6.1, "update", "1.3", "CVE-2025-50002")]}],
+            "staging.example.com": [], "example.org": None}
+        return data
+
+    def vulns_state(self):
+        data = self._demo_vuln_sites()
+        LEV = vulns.LEVELS
+        sites, totals = [], {k: 0 for k in LEV}
+        for name in self.DEMO_SITES:
+            items = data.get(name)
+            checked = items is not None
+            items = items or []
+            counts = {k: 0 for k in LEV}
+            fixable = 0
+            for it in items:
+                for h in it["holes"]:
+                    counts[h["severity"]] += 1
+                    totals[h["severity"]] += 1
+                if any(h["fix"] == "update" for h in it["holes"]):
+                    fixable += 1
+            worst = max([vulns.RANK[h["severity"]] for it in items for h in it["holes"]] + [0])
+            sites.append({"site": name, "checked": checked, "problem": "" if checked else "WordPress could not be started on this website.",
+                          "asked_ok": True, "items": items, "counts": counts, "fixable": fixable, "worst": worst})
+        sites.sort(key=lambda r: (-r["worst"], r["site"]))
+        return {"scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "sites": sites, "totals": totals, "any_unasked": False}
+
+    def vulns_scan(self, refresh=False):
+        self.vuln_scanned = True
+        return Result(True, "Checked the websites for known holes.")
 
     def phpguard_state(self):
         sites = []

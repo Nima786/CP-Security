@@ -30,6 +30,7 @@
     access: 'M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z',
     firewall: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z',
     logins: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
+    vulns: 'M12 2L4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3zm-1 5h2v6h-2V7zm0 8h2v2h-2v-2z',
     botguard: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 6a2 2 0 110 4 2 2 0 010-4zm-4 9.5c0-2 2.7-3 4-3s4 1 4 3V17H8v-.5z',
     phpguard: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM9.4 18.4L8 17l2.6-2.6L8 11.8l1.4-1.4 2.6 2.6 2.6-2.6 1.4 1.4-2.6 2.6L16 17l-1.4 1.4-2.6-2.6-2.6 2.6zM13 9V3.5L18.5 9H13z',
     updates: 'M17.65 6.35A7.96 7.96 0 0012 4a8 8 0 108 8h-2a6 6 0 11-1.76-4.24L13 11h7V4l-2.35 2.35z',
@@ -170,6 +171,7 @@
   const NAV = [
     ['overview', 'Overview', 'overview', 'Overview', 'Protection', true],
     ['advisor', 'Advisor', 'advisor', 'Advisor', 'Protection', true],
+    ['vulns', 'Known holes', 'vulns', 'Holes', 'Protection', false],
     ['blocked', 'Blocked', 'blocked', 'Blocked', 'Protection', true],
     ['access', 'Admin access', 'access', 'Access', 'Protection', false],
     ['ports', 'Open ports', 'ports', 'Ports', 'Protection', false],
@@ -1590,6 +1592,81 @@
       pageHead('One-click login', 'Open the dashboard of any website from here, signed in, without typing a password.'), holder);
   }
 
+  // ------------------------------------------------------------------ known security holes
+  const SEV_TONE = { critical: 'bad', high: 'bad', medium: 'warn', low: '', unknown: '' };
+  const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' };
+
+  function fixText(h) {
+    if (h.fix === 'none') return 'No fix yet \u2014 if you do not need it, removing it is safest.';
+    if (h.fixed_version) return 'Fixed in version ' + h.fixed_version + '. Update it on the WP Updates page.';
+    return 'An update that fixes it is available. Update it on the WP Updates page.';
+  }
+
+  function renderVulns(data, ctl) {
+    const sites = data.sites || [];
+    const totals = data.totals || {};
+    const scanning = data.scan && data.scan.status === 'running';
+    const withHoles = sites.filter(s => s.items.length);
+    const clear = sites.filter(s => s.checked && !s.items.length);
+    const problems = sites.filter(s => !s.checked);
+    const sevBadges = ['critical', 'high', 'medium', 'low'].filter(k => totals[k]).map(k =>
+      badge(totals[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || ''));
+
+    const siteCard = s => h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { class: 'site-name', text: s.site }),
+        ['critical', 'high', 'medium', 'low'].filter(k => s.counts[k]).map(k => badge(s.counts[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || '')),
+        s.fixable ? h('span', { class: 'muted small right', text: s.fixable + ' fixable by updating' }) : null),
+      s.items.map(it => h('div', { class: 'hole' },
+        h('div', { class: 'hole-top' },
+          badge(SEV_LABEL[it.holes[0].severity], SEV_TONE[it.holes[0].severity] || ''),
+          h('strong', { text: it.name }), h('span', { class: 'mono muted', text: it.version }),
+          kindBadge(it.kind === 'core' ? 'core' : it.kind), it.status === 'inactive' ? badge('switched off', '') : null),
+        h('ul', { class: 'plain hole-list' }, it.holes.map(hl => h('li', {},
+          h('span', { class: 'sev-dot ' + (SEV_TONE[hl.severity] || 'none') }), ' ',
+          h('span', { text: hl.title }), hl.cve ? h('span', { class: 'muted small', text: ' (' + hl.cve + ')' }) : null,
+          h('div', { class: 'muted small', text: fixText(hl) })))))));
+
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card login-intro' },
+        h('p', { text: 'This checks every website\u2019s plugins, themes and WordPress itself against a public list of known security holes (the free WPVulnerability database). It only looks up names and version numbers; nothing about your websites is shared. Most holes are closed simply by updating.' }),
+        h('div', { class: 'banner ' + (withHoles.length ? 'bad' : 'ok'), style: 'margin:.5rem 0' }, icon(withHoles.length ? 'alert' : 'check'),
+          h('div', {}, h('div', { text: withHoles.length ? withHoles.length + ' website' + (withHoles.length > 1 ? 's have' : ' has') + ' a known hole' : (clear.length ? 'No known holes found' : 'Not checked yet') }),
+            h('div', { class: 'sub row', style: 'gap:.4rem' }, sevBadges.length ? sevBadges : (data.scan.finished ? [h('span', { text: 'Checked ' + data.scan.finished })] : [])))),
+        data.any_unasked ? h('div', { class: 'note warn', text: 'Some plugins or themes could not be looked up (the vulnerability database could not be reached for them). Press "Check from the database" to try again.' }) : null,
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', type: 'button', disabled: scanning, text: scanning ? 'Checking\u2026' : 'Check again', onclick: () => ctl.check(false) }),
+          h('button', { class: 'btn', type: 'button', disabled: scanning, text: 'Check from the database', title: 'Ask the vulnerability database again, instead of using what it said earlier today', onclick: () => ctl.check(true) }),
+          scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'checking the websites\u2026') : null)),
+      withHoles.map(siteCard),
+      clear.length ? h('section', { class: 'card' }, h('div', { class: 'row clear-line', style: 'gap:.5rem' }, icon('check'),
+        h('span', { text: 'No known holes on: ' }), h('span', { class: 'mono small', text: clear.map(s => s.site).join(', ') }))) : null,
+      problems.length ? h('section', { class: 'card' }, h('div', { class: 'muted small', text: 'Could not check: ' + problems.map(s => s.site).join(', ') })) : null);
+  }
+
+  async function viewVulns() {
+    let data = (await api('/api/vulns')).data;
+    const holder = h('div', {}, null);
+    const paint = () => holder.replaceChildren(renderVulns(data, ctl));
+    const poll = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'vulns') { clearInterval(S.pollTimer); return; }
+        const was = data.scan.status;
+        data = (await api('/api/vulns')).data;
+        paint();
+        if (was === 'running' && data.scan.status !== 'running') toast(data.totals && (data.totals.critical || data.totals.high) ? 'Check finished. Some websites need attention.' : 'Check finished.', 'ok');
+        if (data.scan.status !== 'running') clearInterval(S.pollTimer);
+      }, 2000);
+    };
+    const ctl = {
+      check: async refresh => { const r = await act('/api/vulns/scan', { refresh }); if (r.ok) { data = (await api('/api/vulns')).data; paint(); poll(); } },
+    };
+    paint();
+    if (data.scan.status === 'running') poll();
+    return h('div', { class: 'stack' },
+      pageHead('Known holes', 'Checks your plugins, themes and WordPress against a public list of known security holes, and tells you what to update.'), holder);
+  }
+
   // ------------------------------------------------------------------ bot protection: three switches per website
   const BOT_INFO = {
     xmlrpc: {
@@ -2068,7 +2145,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, botguard: viewBotGuard, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, vulns: viewVulns, botguard: viewBotGuard, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
