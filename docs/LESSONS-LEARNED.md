@@ -143,3 +143,11 @@ Things that cost hours to discover. They explain several design choices, so they
 * Some update-capable plugins start with `if (!is_admin()) return;` (Admin Columns Pro does), so WP-CLI never loads them. Define
   `WP_ADMIN` before WordPress loads with `wp --exec="define('WP_ADMIN', true);" ...` (it runs early enough) and they speak.
   Try that first and fall back to a plain load, then to `--skip-plugins`.
+
+## A list that grows must be summarised, not printed (0.9.10)
+* A plugin with many old holes in the database (one had about 30) produced one row per hole on the Known holes page, each
+  with a red dot, and the totals counted holes. The owner could not tell what to do. Show one line per thing to act on
+  (the plugin), the single answer ("update to this version"), and keep the detail folded away.
+* The version to install is the newest of the versions the holes were fixed in, compared as versions, never as text.
+* A side menu grows with every page added. Give a fixed-height menu its own scrolling and a footer that stays put, and
+  test it at short window heights, not only at widths.

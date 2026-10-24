@@ -16,6 +16,7 @@ How it is safe and quiet:
 * A version is only flagged when it really falls inside a known hole's affected range; the newest, fixed version is not.
 """
 import copy
+import functools
 import json
 import threading
 import time
@@ -147,6 +148,30 @@ def check_item(kind, slug, installed, refresh=False):
     return out
 
 
+def summarize(item):
+    """Boil one plugin/theme/core's list of holes down to what its owner needs to know, and add it to the item:
+    how bad it is (the worst hole), which version to install (the newest version that any of the holes is fixed in, so
+    installing that one closes every hole that has a fix), how many holes there are, and whether some have no fix at all.
+
+    fix_state: "version"  = updating to `fix_to` fixes it
+               "update"   = an update that fixes it exists, but the database does not say which version
+               "none"     = no fix exists yet (removing the plugin is the only safe answer)
+    Safe to call twice."""
+    holes = item["holes"]
+    top = max(holes, key=lambda h: (RANK[h["severity"]], h["score"]))
+    versions = [h["fixed_version"] for h in holes if h["fix"] == "update" and h["fixed_version"]]
+    fix_to = max(versions, key=functools.cmp_to_key(library.version_cmp)) if versions else ""
+    if fix_to:
+        state = "version"
+    elif any(h["fix"] == "update" for h in holes):
+        state = "update"
+    else:
+        state = "none"
+    item.update({"worst": top["severity"], "score": top["score"], "fix_state": state, "fix_to": fix_to,
+                 "hole_count": len(holes), "no_fix_count": sum(1 for h in holes if h["fix"] == "none")})
+    return item
+
+
 # ----------------------------------------------------------------------------- one website
 def _core_version(site, php):
     from . import wpupdate
@@ -185,13 +210,9 @@ def _inspect(name, refresh=False):
             out["asked_ok"] = False
             continue
         if holes:
-            out["items"].append({"kind": kind, "slug": slug, "name": title, "version": version, "status": status, "holes": holes})
-    out["items"].sort(key=lambda i: (-RANK[i["holes"][0]["severity"]], -i["holes"][0]["score"], i["kind"], i["slug"]))
+            out["items"].append(summarize({"kind": kind, "slug": slug, "name": title, "version": version, "status": status, "holes": holes}))
+    out["items"].sort(key=lambda i: (-RANK[i["worst"]], -i["score"], i["kind"], i["slug"]))
     return out
-
-
-def _worst(items):
-    return max([RANK[h["severity"]] for i in items for h in i["holes"]] + [0])
 
 
 # ----------------------------------------------------------------------------- the list for the page
@@ -240,27 +261,30 @@ def _scan_run(refresh):
 LEVELS = ("critical", "high", "medium", "low", "unknown")
 
 
+def site_row(name, scan):
+    """One website's line for the page. Counts are of plugins/themes (each by its worst hole), never of individual holes:
+    a plugin with fourteen old holes is one thing to update, not fourteen."""
+    s = scan or {"checked": False, "problem": "", "items": [], "asked_ok": True}
+    items = [summarize(i) for i in s.get("items", [])]
+    counts = {k: 0 for k in LEVELS}
+    for item in items:
+        counts[item["worst"]] += 1
+    return {"site": name, "checked": s.get("checked", False), "problem": s.get("problem", ""),
+            "asked_ok": s.get("asked_ok", True), "items": items, "counts": counts,
+            "fixable": sum(1 for i in items if i["fix_state"] != "none"),
+            "worst": max([RANK[i["worst"]] for i in items] + [0])}
+
+
+def page(rows, status, finished):
+    """The whole answer for the page from the per-website lines: worst website first, totals of plugins/themes by level."""
+    rows = sorted(rows, key=lambda r: (-r["worst"], r["site"]))
+    totals = {k: sum(r["counts"][k] for r in rows) for k in LEVELS}
+    return {"scan": {"status": status, "finished": finished}, "sites": rows, "totals": totals,
+            "any_unasked": any(not r["asked_ok"] for r in rows)}
+
+
 def state(names=None):
-    """For the page: one line per website, worst first, with how many holes and how many are fixable by updating."""
+    """For the page: one line per website, worst first, counting plugins/themes with a known hole."""
     names = names if names is not None else _names()
     scan = scan_state()
-    sites = []
-    totals = {k: 0 for k in LEVELS}
-    any_unasked = False
-    for name in names:
-        s = scan["sites"].get(name) or {"checked": False, "problem": "", "items": [], "asked_ok": True}
-        counts = {k: 0 for k in LEVELS}
-        fixable = 0
-        for item in s.get("items", []):
-            for hole in item["holes"]:
-                counts[hole["severity"]] += 1
-                totals[hole["severity"]] += 1
-            if any(h["fix"] == "update" for h in item["holes"]):
-                fixable += 1
-        any_unasked = any_unasked or not s.get("asked_ok", True)
-        sites.append({"site": name, "checked": s.get("checked", False), "problem": s.get("problem", ""),
-                      "asked_ok": s.get("asked_ok", True), "items": s.get("items", []), "counts": counts,
-                      "fixable": fixable, "worst": _worst(s.get("items", []))})
-    sites.sort(key=lambda r: (-r["worst"], r["site"]))
-    return {"scan": {"status": scan["status"], "finished": scan["finished"]}, "sites": sites,
-            "totals": totals, "any_unasked": any_unasked}
+    return page([site_row(n, scan["sites"].get(n)) for n in names], scan["status"], scan["finished"])

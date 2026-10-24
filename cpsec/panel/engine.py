@@ -1510,6 +1510,12 @@ class DemoEngine:
                 {"kind": "plugin", "slug": "old-slider", "name": "Old Slider", "version": "3.1", "status": "inactive",
                  "holes": [H("SQL injection", "high", 8.2, "none", "", "CVE-2025-40001")]}],
             "blog.example.com": [
+                {"kind": "plugin", "slug": "jet-engine", "name": "JetEngine", "version": "3.7.8", "status": "active",
+                 "holes": [H("Stored cross-site scripting (contributor)", "high", 7.2, "update", "3.8.16.1", "CVE-2026-60013"),
+                           H("Arbitrary file read", "high", 7.5, "update", "3.8.10", "CVE-2026-60012"),
+                           H("Missing authorization", "medium", 5.3, "update", "3.8.8", "CVE-2026-60011"),
+                           H("Reflected cross-site scripting", "medium", 6.1, "update", "3.7.9", "CVE-2026-60010"),
+                           H("Information exposure", "unknown", 0.0, "update", "3.8.1", "")]},
                 {"kind": "theme", "slug": "legacy-theme", "name": "Legacy Theme", "version": "1.2", "status": "active",
                  "holes": [H("Stored cross-site scripting", "medium", 6.1, "update", "1.3", "CVE-2025-50002")]}],
             "staging.example.com": [], "example.org": None}
@@ -1517,25 +1523,14 @@ class DemoEngine:
 
     def vulns_state(self):
         data = self._demo_vuln_sites()
-        LEV = vulns.LEVELS
-        sites, totals = [], {k: 0 for k in LEV}
+        rows = []
         for name in self.DEMO_SITES:
             items = data.get(name)
-            checked = items is not None
-            items = items or []
-            counts = {k: 0 for k in LEV}
-            fixable = 0
-            for it in items:
-                for h in it["holes"]:
-                    counts[h["severity"]] += 1
-                    totals[h["severity"]] += 1
-                if any(h["fix"] == "update" for h in it["holes"]):
-                    fixable += 1
-            worst = max([vulns.RANK[h["severity"]] for it in items for h in it["holes"]] + [0])
-            sites.append({"site": name, "checked": checked, "problem": "" if checked else "WordPress could not be started on this website.",
-                          "asked_ok": True, "items": items, "counts": counts, "fixable": fixable, "worst": worst})
-        sites.sort(key=lambda r: (-r["worst"], r["site"]))
-        return {"scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "sites": sites, "totals": totals, "any_unasked": False}
+            if items is None:
+                rows.append(vulns.site_row(name, {"checked": False, "problem": "WordPress could not be started on this website.", "items": []}))
+            else:
+                rows.append(vulns.site_row(name, {"checked": True, "problem": "", "items": items, "asked_ok": True}))
+        return vulns.page(rows, "done", time.strftime("%Y-%m-%d %H:%M:%S"))
 
     def vulns_scan(self, refresh=False):
         self.vuln_scanned = True

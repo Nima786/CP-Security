@@ -218,10 +218,11 @@ summary { cursor: pointer; font-weight: 600; color: var(--brand); }
   .nav .more-btn svg { width: 22px; height: 22px; fill: currentColor; }
   .sheet { display: flex; flex-direction: column; position: fixed; z-index: 30; left: .6rem; right: .6rem; bottom: calc(4.6rem + env(safe-area-inset-bottom)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 12px 40px rgba(0,0,0,.3); padding: .4rem; }
   .sheet[hidden] { display: none; }
+  .sheet { max-height: calc(100vh - 8.6rem - env(safe-area-inset-bottom)); max-height: calc(100dvh - 8.6rem - env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; }
   .sheet a { display: flex; align-items: center; gap: .8rem; padding: .8rem 1rem; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; }
   .sheet a svg { width: 22px; height: 22px; fill: currentColor; }
   .sheet a[aria-current="page"] { background: var(--grad); color: #fff; }
-  .sheet-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .6rem 1rem .4rem; border-top: 1px solid var(--line); margin-top: .3rem; }
+  .sheet-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .6rem 1rem .4rem; border-top: 1px solid var(--line); margin-top: .3rem; position: sticky; bottom: 0; background: var(--surface); }
   .finding { padding: .9rem 1rem; gap: .75rem; }
   .card-foot { padding: .85rem 1rem; }
   .step { padding: .8rem 1rem; }
@@ -383,13 +384,37 @@ tr.updating td { background: var(--surface-2); }
   .copies-table td:nth-child(5) { grid-column: 2; grid-row: 1 / 4; justify-self: end; padding: 0; }
 }
 
-/* ---------- known holes ---------- */
+/* ---------- known holes: one row per plugin or theme, the holes themselves tucked away ---------- */
 .hole { padding: .85rem 1.25rem; border-top: 1px solid var(--line); }
 .hole-top { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-.hole-top .site-name { font-size: 1rem; }
+.hole-fix { margin-top: .35rem; overflow-wrap: anywhere; }
+.hole-more { margin-top: .4rem; }
+.hole-more summary { font-size: .9rem; }
 .hole-list { margin: .5rem 0 0; }
-.hole-list li { margin: .35rem 0; }
-.sev-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); vertical-align: middle; }
-.sev-dot.bad { background: var(--bad); } .sev-dot.warn { background: var(--warn); } .sev-dot.none { background: var(--line); }
+.hole-list li { margin: .35rem 0; overflow-wrap: anywhere; }
 .clear-line svg { width: 1.3rem; height: 1.3rem; flex: none; color: var(--ok); }
 @media (max-width: 720px) { .hole { padding: .8rem 1rem; } }
+
+/* ---------- the side menu always fits: it scrolls when the window is short, and "Sign out" stays in view ---------- */
+@media (min-width: 901px) {
+  .side { height: 100vh; height: 100dvh; overflow: hidden; }
+  .side .brand, .side .foot { flex: none; }
+  .side .nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+               padding: 2px .35rem 2px 2px; margin: -2px -.35rem -2px -2px; }
+  .side .foot { margin-top: 0; padding-top: .75rem; border-top: 1px solid var(--line); }
+}
+/* a shorter window: tighter spacing so more of the menu shows without scrolling */
+@media (min-width: 901px) and (max-height: 900px) {
+  .side { padding: .9rem .8rem; gap: .8rem; }
+  .side .nav { gap: .55rem; }
+  .side .nav a { padding: .42rem .7rem; }
+  .side .nav-title { padding-bottom: .05rem; }
+}
+@media (min-width: 901px) and (max-height: 760px) {
+  .side { padding: .7rem .7rem; gap: .6rem; }
+  .side .nav { gap: .4rem; }
+  .side .nav a { padding: .3rem .65rem; font-size: .93rem; gap: .65rem; }
+  .side .nav svg { width: 20px; height: 20px; }
+  .side .brand img { width: 26px; height: 26px; }
+  .side .foot { padding-top: .5rem; }
+}

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.10
+* **The side menu always fits.** On a short or small desktop window the bottom entries (Setup, Settings, Sign out) were
+  cut off and could not be reached. The menu now scrolls by itself when the window is too short, spacing tightens on
+  shorter windows, and "Signed in as / Sign out" always stays in view. On phones, the "More" list is never taller than
+  the screen any more: it scrolls and keeps Sign out at its bottom.
+* **Known holes is much easier to read.** Each plugin, theme or WordPress itself is now ONE line instead of one line per
+  hole (a plugin such as JetEngine had around 30 old holes listed, each with a red dot):
+  * It says what is installed and what to install: "Installed 3.7.8 -> update to 3.8.16.1". That version is the newest
+    one any of the holes was fixed in, so updating to it closes every hole that has a fix.
+  * If no fixed version exists yet it says so, and that removing the plugin is safest. If only some holes are unfixed it
+    says how many.
+  * The severity label is the worst hole of that plugin ("Not rated" where the database gave no score). The red dots are gone.
+  * The list of individual holes is still there, folded away under "See the N holes".
+  * The totals at the top count plugins and themes, not holes, and there is one "Open WP Updates" button instead of the
+    same hint on every row.
+
 ## 0.9.9
 * **Daily watch** (new page): once a day the panel checks every website for signs of a break-in and sends a Telegram
   message only when something new turns up.

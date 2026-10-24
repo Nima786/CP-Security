@@ -59,6 +59,65 @@ class Matching(unittest.TestCase):
         self.assertEqual(vulns._severity("x")[0], "unknown")
 
 
+def found(severity="high", score=7.5, fix="update", fixed="", title="a hole"):
+    return {"title": title, "severity": severity, "score": score, "fix": fix, "fixed_version": fixed, "cve": ""}
+
+
+def plugin(*holes, version="3.7.8"):
+    return {"kind": "plugin", "slug": "jet-engine", "name": "JetEngine", "version": version, "status": "active", "holes": list(holes)}
+
+
+class Summary(unittest.TestCase):
+    """Many holes in one plugin become ONE line: how bad, and which version to install."""
+
+    def test_many_holes_give_one_version_to_install_the_newest_of_the_fixed_versions(self):
+        item = vulns.summarize(plugin(found(fixed="3.7.9"), found(fixed="3.8.16.1"), found(fixed="3.8.10"), found(fixed="3.8.9")))
+        self.assertEqual((item["fix_state"], item["fix_to"], item["hole_count"], item["no_fix_count"]), ("version", "3.8.16.1", 4, 0))
+
+    def test_versions_are_compared_as_versions_not_as_text(self):
+        item = vulns.summarize(plugin(found(fixed="3.8.9"), found(fixed="3.8.10")))
+        self.assertEqual(item["fix_to"], "3.8.10", "10 is newer than 9")
+
+    def test_the_worst_hole_decides_how_bad_it_is_even_if_it_is_listed_late(self):
+        item = vulns.summarize(plugin(found("medium", 5.0, fixed="1"), found("critical", 9.8, fixed="1"), found("unknown", 0.0, fixed="1")))
+        self.assertEqual((item["worst"], item["score"]), ("critical", 9.8))
+
+    def test_holes_nobody_has_rated_are_shown_as_not_rated_not_as_alarms(self):
+        item = vulns.summarize(plugin(found("unknown", 0.0, fixed="2.0"), found("unknown", 0.0, fixed="2.1")))
+        self.assertEqual(item["worst"], "unknown")
+
+    def test_some_holes_fixed_and_some_not_still_names_the_version_and_counts_the_unfixed(self):
+        item = vulns.summarize(plugin(found(fixed="2.0"), found(fix="none")))
+        self.assertEqual((item["fix_state"], item["fix_to"], item["no_fix_count"]), ("version", "2.0", 1))
+
+    def test_no_fix_anywhere_says_so(self):
+        item = vulns.summarize(plugin(found(fix="none"), found(fix="none")))
+        self.assertEqual((item["fix_state"], item["fix_to"], item["no_fix_count"]), ("none", "", 2))
+
+    def test_a_fix_that_exists_without_a_stated_version_is_still_a_fix(self):
+        item = vulns.summarize(plugin(found(fixed=""), found(fixed="")))
+        self.assertEqual((item["fix_state"], item["fix_to"]), ("update", ""))
+
+    def test_the_page_counts_plugins_not_holes(self):
+        many = plugin(*[found("high", 7.5, fixed="3.8.%d" % n) for n in range(14)])          # fourteen old holes in one plugin
+        other = {"kind": "theme", "slug": "t", "name": "t", "version": "1", "status": "active", "holes": [found("medium", 5.0, fixed="2")]}
+        row = vulns.site_row("a.example.com", {"checked": True, "items": [many, other]})
+        self.assertEqual(row["counts"], {"critical": 0, "high": 1, "medium": 1, "low": 0, "unknown": 0})
+        self.assertEqual(row["fixable"], 2)
+        page = vulns.page([row, vulns.site_row("b.example.com", {"checked": True, "items": []})], "done", "now")
+        self.assertEqual(page["totals"]["high"], 1)
+        self.assertEqual([r["site"] for r in page["sites"]], ["a.example.com", "b.example.com"], "worst website first")
+
+    def test_summarizing_twice_changes_nothing(self):
+        item = vulns.summarize(plugin(found(fixed="2.0")))
+        before = dict(item)
+        self.assertEqual(vulns.summarize(item), before)
+
+    def test_a_website_with_nothing_wrong_has_an_empty_line(self):
+        row = vulns.site_row("a.example.com", {"checked": True, "items": []})
+        self.assertEqual((row["items"], row["fixable"], row["worst"]), ([], 0, 0))
+
+
 class FakeDatabase:
     def __init__(self):
         self.answers = {}            # "kind:slug" -> list of holes (or None to mean "no answer")
@@ -162,6 +221,8 @@ class WebsiteCase(CacheCase):
         self.assertEqual(row["site"], "shop.example.com")
         self.assertEqual(row["counts"]["critical"], 1)
         self.assertEqual(row["counts"]["medium"], 2)
+        self.assertEqual(row["items"][0]["fix_to"], "2.1.1")
+        self.assertEqual(row["items"][2]["fix_state"], "none", "WordPress itself: no fixed version in the database")
         self.assertEqual(row["worst"], vulns.RANK["critical"])
         self.assertEqual(row["fixable"], 2, "the two fixable ones (not the unfixed core hole)")
         self.assertEqual(data["totals"]["critical"], 1)

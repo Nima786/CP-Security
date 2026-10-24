@@ -1539,6 +1539,22 @@ class KnownHolesPage(PanelCase):
         org = [s for s in data["sites"] if s["site"] == "example.org"][0]
         self.assertFalse(org["checked"])
 
+    def test_each_plugin_is_one_row_with_the_version_to_install(self):
+        data = self.request("GET", "/api/vulns")[1]
+        rows = {s["site"]: s for s in data["sites"]}
+        shop = {i["slug"]: i for i in rows["shop.example.com"]["items"]}
+        self.assertEqual(len(shop), 2, "two plugins, not three holes")
+        self.assertEqual((shop["bricksforge"]["worst"], shop["bricksforge"]["fix_state"], shop["bricksforge"]["fix_to"]), ("critical", "version", "2.1.1"))
+        self.assertEqual((shop["old-slider"]["fix_state"], shop["old-slider"]["fix_to"]), ("none", ""))
+        jet = {i["slug"]: i for i in rows["blog.example.com"]["items"]}["jet-engine"]
+        self.assertEqual(jet["hole_count"], 5)
+        self.assertEqual(jet["fix_to"], "3.8.16.1", "the newest of the versions the holes were fixed in, not the first one listed")
+        self.assertEqual(jet["worst"], "high", "the worst hole, even though a not-rated hole is also listed")
+        # the counts are of plugins and themes, never of holes
+        self.assertEqual(data["totals"], {"critical": 1, "high": 2, "medium": 1, "low": 0, "unknown": 0})
+        self.assertEqual(rows["blog.example.com"]["counts"]["high"], 1)
+        self.assertEqual(rows["shop.example.com"]["fixable"], 1, "the unfixable plugin is not counted as fixable")
+
     def test_a_clear_website_has_no_items(self):
         rows = {s["site"]: s for s in self.request("GET", "/api/vulns")[1]["sites"]}
         self.assertEqual(rows["staging.example.com"]["items"], [])

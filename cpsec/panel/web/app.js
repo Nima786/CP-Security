@@ -1667,12 +1667,22 @@
 
   // ------------------------------------------------------------------ known security holes
   const SEV_TONE = { critical: 'bad', high: 'bad', medium: 'warn', low: '', unknown: '' };
-  const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' };
+  const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', unknown: 'Not rated' };
+  const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'];
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
 
-  function fixText(h) {
-    if (h.fix === 'none') return 'No fix yet \u2014 if you do not need it, removing it is safest.';
-    if (h.fixed_version) return 'Fixed in version ' + h.fixed_version + '. Update it on the WP Updates page.';
-    return 'An update that fixes it is available. Update it on the WP Updates page.';
+  // one plugin/theme in one line of plain words: what is installed, and what to install instead
+  function fixLine(it) {
+    const installed = [h('span', { class: 'muted', text: 'Installed ' }), h('span', { class: 'mono', text: it.version || '?' })];
+    if (it.fix_state === 'version') {
+      return h('div', { class: 'hole-fix' }, installed, h('span', { class: 'muted', text: ' \u2192 update to ' }), h('strong', { class: 'mono', text: it.fix_to }),
+        it.no_fix_count ? h('div', { class: 'muted small', text: plural(it.no_fix_count, 'of its holes has', 'of its holes have') + ' no fix yet, so the rest stays open after updating.' }) : null);
+    }
+    if (it.fix_state === 'update') {
+      return h('div', { class: 'hole-fix' }, installed, h('span', { class: 'muted', text: ' \u2192 an update that fixes it is available.' }),
+        it.no_fix_count ? h('div', { class: 'muted small', text: plural(it.no_fix_count, 'of its holes has', 'of its holes have') + ' no fix yet.' }) : null);
+    }
+    return h('div', { class: 'hole-fix' }, installed, h('span', { class: 'muted', text: ' \u2192 no fixed version exists yet. If you do not need it, removing it is safest.' }));
   }
 
   function renderVulns(data, ctl) {
@@ -1682,29 +1692,40 @@
     const withHoles = sites.filter(s => s.items.length);
     const clear = sites.filter(s => s.checked && !s.items.length);
     const problems = sites.filter(s => !s.checked);
-    const sevBadges = ['critical', 'high', 'medium', 'low'].filter(k => totals[k]).map(k =>
-      badge(totals[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || ''));
+    const itemCount = withHoles.reduce((n, s) => n + s.items.length, 0);
+    const fixable = withHoles.reduce((n, s) => n + s.fixable, 0);
+    const sevBadges = SEV_ORDER.filter(k => totals[k]).map(k => badge(totals[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || ''));
+
+    const itemRow = it => h('div', { class: 'hole' },
+      h('div', { class: 'hole-top' },
+        badge(SEV_LABEL[it.worst], SEV_TONE[it.worst] || ''),
+        h('strong', { text: it.name }), kindBadge(it.kind === 'core' ? 'core' : it.kind), it.status === 'inactive' ? badge('switched off', '') : null),
+      fixLine(it),
+      h('details', { class: 'hole-more' },
+        h('summary', { text: it.hole_count === 1 ? 'See the hole' : 'See the ' + it.hole_count + ' holes' }),
+        h('ul', { class: 'plain hole-list' }, it.holes.map(hl => h('li', {},
+          h('span', { class: 'muted small', text: SEV_LABEL[hl.severity] + ' \u00b7 ' }), h('span', { text: hl.title }),
+          hl.cve ? h('span', { class: 'muted small', text: ' (' + hl.cve + ')' }) : null,
+          hl.fix === 'none' ? h('span', { class: 'muted small', text: ' \u2014 no fix yet' }) : (hl.fixed_version ? h('span', { class: 'muted small', text: ' \u2014 fixed in ' + hl.fixed_version }) : null))))));
 
     const siteCard = s => h('section', { class: 'card flush' },
       h('div', { class: 'card-head' }, h('h2', { class: 'site-name', text: s.site }),
-        ['critical', 'high', 'medium', 'low'].filter(k => s.counts[k]).map(k => badge(s.counts[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || '')),
-        s.fixable ? h('span', { class: 'muted small right', text: s.fixable + ' fixable by updating' }) : null),
-      s.items.map(it => h('div', { class: 'hole' },
-        h('div', { class: 'hole-top' },
-          badge(SEV_LABEL[it.holes[0].severity], SEV_TONE[it.holes[0].severity] || ''),
-          h('strong', { text: it.name }), h('span', { class: 'mono muted', text: it.version }),
-          kindBadge(it.kind === 'core' ? 'core' : it.kind), it.status === 'inactive' ? badge('switched off', '') : null),
-        h('ul', { class: 'plain hole-list' }, it.holes.map(hl => h('li', {},
-          h('span', { class: 'sev-dot ' + (SEV_TONE[hl.severity] || 'none') }), ' ',
-          h('span', { text: hl.title }), hl.cve ? h('span', { class: 'muted small', text: ' (' + hl.cve + ')' }) : null,
-          h('div', { class: 'muted small', text: fixText(hl) })))))));
+        SEV_ORDER.filter(k => s.counts[k]).map(k => badge(s.counts[k] + ' ' + SEV_LABEL[k].toLowerCase(), SEV_TONE[k] || '')),
+        h('span', { class: 'muted small right', text: plural(s.items.length, 'plugin or theme', 'plugins and themes') + ' to fix' })),
+      s.items.map(itemRow));
 
     return h('div', { class: 'stack' },
       h('section', { class: 'card login-intro' },
-        h('p', { text: 'This checks every website\u2019s plugins, themes and WordPress itself against a public list of known security holes (the free WPVulnerability database). It only looks up names and version numbers; nothing about your websites is shared. Most holes are closed simply by updating.' }),
+        h('p', { text: 'This checks every website\u2019s plugins, themes and WordPress itself against a public list of known security holes (the free WPVulnerability database). It only looks up names and version numbers; nothing about your websites is shared. Each plugin is shown once, with the version to install. Most holes are closed simply by updating.' }),
         h('div', { class: 'banner ' + (withHoles.length ? 'bad' : 'ok'), style: 'margin:.5rem 0' }, icon(withHoles.length ? 'alert' : 'check'),
-          h('div', {}, h('div', { text: withHoles.length ? withHoles.length + ' website' + (withHoles.length > 1 ? 's have' : ' has') + ' a known hole' : (clear.length ? 'No known holes found' : 'Not checked yet') }),
-            h('div', { class: 'sub row', style: 'gap:.4rem' }, sevBadges.length ? sevBadges : (data.scan.finished ? [h('span', { text: 'Checked ' + data.scan.finished })] : [])))),
+          h('div', {}, h('div', { text: withHoles.length
+              ? plural(withHoles.length, 'website has', 'websites have') + ' a plugin or theme with a known hole'
+              : (clear.length ? 'No known holes found' : 'Not checked yet') }),
+            h('div', { class: 'sub row', style: 'gap:.4rem' }, sevBadges.length
+              ? [sevBadges, h('span', { text: itemCount === 1 ? '(1 plugin or theme' + (fixable ? ', fixable by updating)' : ')') : '(' + itemCount + ' plugins and themes' + (fixable ? ', ' + fixable + ' fixable by updating)' : ')') })]
+              : (data.scan.finished ? [h('span', { text: 'Checked ' + data.scan.finished })] : [])))),
+        fixable ? h('div', { class: 'note', style: 'margin:.5rem 0' }, h('span', { text: 'Fixes are done on the WP Updates page: a copy is saved first, then the update is installed. Plugins you bought may need their licence active to update. ' }),
+          h('a', { class: 'btn small', href: '#/updates', text: 'Open WP Updates' })) : null,
         data.any_unasked ? h('div', { class: 'note warn', text: 'Some plugins or themes could not be looked up (the vulnerability database could not be reached for them). Press "Check from the database" to try again.' }) : null,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', type: 'button', disabled: scanning, text: scanning ? 'Checking\u2026' : 'Check again', onclick: () => ctl.check(false) }),

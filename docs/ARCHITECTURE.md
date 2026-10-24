@@ -135,7 +135,7 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   version, and asks the free WPVulnerability API (`/plugin/<slug>/`, `/theme/<slug>/`, `/core/<version>/`; no key, only names and
   versions leave the server). A version is flagged when it falls inside a hole's `operator` range (min/max with ge/gt/le/lt);
   the fixing version is the `lt` max. The API sends yes/no fields as the strings '0'/'1', so `unfixed`/booleans are read with a
-  string-aware test (a bare truth test reads '0' as true). CVSS score gives the severity. Answers are cached a day in
+  string-aware test (a bare truth test reads '0' as true). CVSS score gives the severity. `summarize()` folds an item's holes into one line (worst severity, `fix_to` = the newest of the versions the holes were fixed in, found with `library.version_cmp` so 3.8.10 beats 3.8.9; `fix_state` version/update/none); `site_row()`/`page()` count plugins and themes, never holes, and the demo panel uses the same functions. Answers are cached a day in
   `vuln-cache.json`; a lookup that fails keeps yesterday's answer rather than dropping to nothing. Verified live that the fixed
   Bricksforge is not flagged.
 * **Bot protection (`botguard.py`).** Three independent marked blocks (`# BEGIN CP-Security bot-<key>`) at the top of the website's
