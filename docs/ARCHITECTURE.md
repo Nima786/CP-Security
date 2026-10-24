@@ -123,6 +123,14 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
   an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
   the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **Daily watch (`sentry.py`).** Per website, as the site user: `wp core verify-checksums` for changed/added core files, and a
+  scoped `grep` for back-door signatures (eval/assert/system on `$_GET`/`$_POST`, `$_GET[x](` dynamic calls, known shell names)
+  plus any PHP in the uploads folder. The grep is deliberately limited to where a stranger can write without prior code
+  execution (uploads, mu-plugins, wp-content root, wp-config), because scanning whole plugin/theme vendor trees only yields
+  false positives (minifiers, PDF libraries). Findings per site are stored in `sentry-state.json`; the first run is a silent
+  baseline and later runs alert (Telegram `sendMessage` to each chat) only on findings not seen before. The bot token lives
+  in root-only panel settings and is never returned to the browser. The panel's own daily loop (`LiveEngine._watch_loop`)
+  runs it when `due()`; `python -m cpsec.sentry` runs it by hand.
 * **Known holes (`vulns.py`).** Reads each website's plugin and theme list (as the site user, via `library._read_site`) plus the core
   version, and asks the free WPVulnerability API (`/plugin/<slug>/`, `/theme/<slug>/`, `/core/<version>/`; no key, only names and
   versions leave the server). A version is flagged when it falls inside a hole's `operator` range (min/max with ge/gt/le/lt);

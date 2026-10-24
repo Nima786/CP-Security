@@ -14,6 +14,10 @@ DEFAULTS = {
     "access": "login",
     # how many saved copies of each plugin, theme and database are kept after an update (1 to 5)
     "copies_keep": 1,
+    # the daily watch for break-ins and its Telegram alerts
+    "watch_enabled": False,
+    "telegram_token": "",
+    "telegram_chats": [],
 }
 
 _lock = threading.Lock()

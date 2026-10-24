@@ -30,6 +30,7 @@
     access: 'M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z',
     firewall: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z',
     logins: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
+    watch: 'M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zm0 12a4.5 4.5 0 110-9 4.5 4.5 0 010 9zm0-7a2.5 2.5 0 100 5 2.5 2.5 0 000-5z',
     vulns: 'M12 2L4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3zm-1 5h2v6h-2V7zm0 8h2v2h-2v-2z',
     botguard: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 6a2 2 0 110 4 2 2 0 010-4zm-4 9.5c0-2 2.7-3 4-3s4 1 4 3V17H8v-.5z',
     phpguard: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM9.4 18.4L8 17l2.6-2.6L8 11.8l1.4-1.4 2.6 2.6 2.6-2.6 1.4 1.4-2.6 2.6L16 17l-1.4 1.4-2.6-2.6-2.6 2.6zM13 9V3.5L18.5 9H13z',
@@ -180,6 +181,7 @@
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
     ['botguard', 'Bot protection', 'botguard', 'Bots', 'Protection', false],
     ['phpguard', 'No PHP in uploads', 'phpguard', 'Uploads', 'Protection', false],
+    ['watch', 'Daily watch', 'watch', 'Watch', 'Protection', false],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
     ['logins', 'One-click login', 'logins', 'Login', 'Protection', false],
     ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
@@ -1592,6 +1594,77 @@
       pageHead('One-click login', 'Open the dashboard of any website from here, signed in, without typing a password.'), holder);
   }
 
+  // ------------------------------------------------------------------ the daily watch for break-ins
+  function renderWatch(data, ctl, form) {
+    const scanning = data.scan && data.scan.status === 'running';
+    const withFindings = data.sites.filter(s => s.count);
+    const checked = data.sites.filter(s => s.checked);
+
+    form.enabled.checked = form.enabled.checked === undefined ? data.enabled : form.enabled.checked;
+
+    const statusLine = data.last_run
+      ? 'Last checked ' + data.last_run + (data.baseline_done ? '' : '')
+      : 'Not checked yet.';
+
+    const results = data.last_run ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, h('h2', { text: 'What was found' }),
+        withFindings.length ? badge(withFindings.length + ' website' + (withFindings.length > 1 ? 's' : '') + ' to check', 'bad') : badge('nothing unusual', 'ok'),
+        h('button', { class: 'btn small right', type: 'button', disabled: scanning, text: scanning ? 'Checking\u2026' : 'Check now', onclick: ctl.scan })),
+      withFindings.length
+        ? withFindings.map(s => h('div', { class: 'hole' },
+            h('div', { class: 'hole-top' }, badge('look', 'bad'), h('strong', { class: 'site-name', text: s.site })),
+            h('ul', { class: 'plain hole-list' }, s.findings.map(f => h('li', {},
+              h('span', { class: 'sev-dot bad' }), ' ', h('span', { text: f.text }))))))
+        : h('div', { class: 'pad', style: 'padding:1rem 1.25rem' }, h('p', { class: 'muted', style: 'margin:0', text: 'Nothing unusual on ' + checked.length + ' website' + (checked.length === 1 ? '' : 's') + '. You will get a Telegram message only if something new appears.' }))) : null;
+
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card' },
+        h('p', { text: 'Once a day this checks every website for signs of a break-in: WordPress\u2019s own files that were changed, files that look like a planted back door, and programs left in the uploads folder. The first check just learns what is normally there and stays silent; after that you get a Telegram message only when something new turns up. Nothing is ever changed \u2014 it only looks and tells you.' }),
+        h('label', { class: 'tick' }, form.enabled, h('span', { text: 'Send me a Telegram message when something new is found' })),
+        h('div', { class: 'field', style: 'margin-top:1rem' }, h('label', { for: 'wt-token', text: 'Telegram bot token' }), form.token,
+          h('div', { class: 'muted small', text: data.has_token ? 'A token is already saved. Leave this blank to keep it, or paste a new one from @BotFather to replace it.' : 'In Telegram, open @BotFather, send /newbot, and paste the token it gives you here.' })),
+        h('div', { class: 'field' }, h('label', { for: 'wt-chats', text: 'Send alerts to these Telegram IDs (one per line)' }), form.chats,
+          h('div', { class: 'muted small', text: 'A personal ID is a number (message @userinfobot to get yours). A group or channel ID starts with -100. Message your bot once first, or add it to the group, so it is allowed to write to you.' })),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', type: 'button', text: 'Save', onclick: () => ctl.save(form) }),
+          h('button', { class: 'btn', type: 'button', text: 'Send a test message', onclick: () => ctl.test(form) })),
+        h('div', { class: 'muted small', style: 'margin-top:.75rem' }, statusLine, data.configured ? '' : ' Alerts are off until a token and at least one ID are saved and the box above is ticked.')),
+      results);
+  }
+
+  async function viewWatch() {
+    let data = (await api('/api/watch')).data;
+    const holder = h('div', {}, null);
+    const makeForm = () => ({
+      enabled: h('input', { type: 'checkbox', checked: data.enabled }),
+      token: h('input', { type: 'password', id: 'wt-token', autocomplete: 'new-password', placeholder: data.has_token ? 'leave blank to keep the saved token' : 'paste the bot token' }),
+      chats: h('textarea', { id: 'wt-chats', rows: '3', text: (data.chats || []).join('\n') }),
+    });
+    let form = makeForm();
+    const paint = () => { form = makeForm(); holder.replaceChildren(renderWatch(data, ctl, form)); };
+    const poll = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'watch') { clearInterval(S.pollTimer); return; }
+        const was = data.scan.status;
+        data = (await api('/api/watch')).data;
+        paint();
+        if (was === 'running' && data.scan.status !== 'running') toast('Check finished.', 'ok');
+        if (data.scan.status !== 'running') clearInterval(S.pollTimer);
+      }, 2000);
+    };
+    const refresh = async () => { data = (await api('/api/watch')).data; paint(); if (data.scan.status === 'running') poll(); };
+    const ctl = {
+      save: async f => { const r = await act('/api/watch/save', { enabled: f.enabled.checked, token: f.token.value, chats: f.chats.value }); if (r.ok) await refresh(); },
+      test: async f => { await act('/api/watch/test', { token: f.token.value, chats: f.chats.value }, 'Sending a test message\u2026'); },
+      scan: async () => { const r = await act('/api/watch/scan', {}); if (r.ok) { data = (await api('/api/watch')).data; paint(); poll(); } },
+    };
+    paint();
+    if (data.scan.status === 'running') poll();
+    return h('div', { class: 'stack' },
+      pageHead('Daily watch', 'Checks your websites every day for signs of a break-in and messages you on Telegram if something new appears.'), holder);
+  }
+
   // ------------------------------------------------------------------ known security holes
   const SEV_TONE = { critical: 'bad', high: 'bad', medium: 'warn', low: '', unknown: '' };
   const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' };
@@ -2145,7 +2218,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, vulns: viewVulns, botguard: viewBotGuard, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, vulns: viewVulns, botguard: viewBotGuard, phpguard: viewPhpGuard, watch: viewWatch, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];

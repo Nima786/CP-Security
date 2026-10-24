@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.9
+* **Daily watch** (new page): once a day the panel checks every website for signs of a break-in and sends a Telegram
+  message only when something new turns up.
+  * It looks for WordPress's own files that were changed (official checksums), files that look like a planted back door,
+    and programs (PHP files) left in the uploads folder. All reading is done as each website's own user, never as root,
+    and nothing is ever changed — it only looks and tells.
+  * The first check quietly learns what is normally there; after that only NEW things raise an alert, so there is no flood.
+  * Telegram is set up on the page: paste a bot token from @BotFather and one or more chat IDs (a person, a group, or a
+    channel — one per line). A "Send a test message" button confirms it works. The bot token is stored root-only and is
+    never shown back in the browser.
+  * The search is aimed where a stranger can actually drop a file without already being in (the uploads and must-use
+    folders, the wp-content root, wp-config), with tight signatures, so honest plugin and library code is not flagged.
+    Checked on the real server: all 11 websites, WordPress core files all verified, and no false alarms.
+* The panel runs this check itself about once a day while it is running; there is also a "Check now" button.
 ## 0.9.8
 * **Known holes** (new page): checks every website's plugins, themes and WordPress itself against a public list of known
   security holes (the free WPVulnerability database, no account and no key), and shows which websites have a known hole, how

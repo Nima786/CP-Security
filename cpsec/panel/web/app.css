@@ -81,6 +81,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 .field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .9rem; }
 .field label { font-weight: 600; font-size: .92rem; }
+.field textarea { padding: .6rem .75rem; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); width: 100%; font: inherit; resize: vertical; }
 .field input, .field select { padding: .6rem .75rem; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); min-height: 42px; width: 100%; }
 .inline-form { display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-end; }
 .inline-form .field { margin: 0; flex: 1 1 200px; }

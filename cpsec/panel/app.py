@@ -152,6 +152,10 @@ class App:
             ("POST", "/api/logins/user"): (self.api_logins_user, True),
             ("POST", "/api/logins/open"): (self.api_logins_open, True),
             ("GET", "/api/vulns"): (self.api_vulns, True),
+            ("GET", "/api/watch"): (self.api_watch, True),
+            ("POST", "/api/watch/save"): (self.api_watch_save, True),
+            ("POST", "/api/watch/test"): (self.api_watch_test, True),
+            ("POST", "/api/watch/scan"): (self.api_watch_scan, True),
             ("POST", "/api/vulns/scan"): (self.api_vulns_scan, True),
             ("GET", "/api/botguard"): (self.api_botguard, True),
             ("POST", "/api/botguard/scan"): (self.api_botguard_scan, True),
@@ -731,6 +735,23 @@ class App:
     def api_vulns_scan(self, req, session):
         res = self.engine.vulns_scan(refresh=req.json().get("refresh") is True)
         return _result(res)
+
+    # ------------------------------------------------------------------ the daily watch for break-ins
+    def api_watch(self, req, session):
+        return _json(200, self.engine.watch_state())
+
+    def api_watch_save(self, req, session):
+        b = req.json()
+        res = self.engine.watch_save(_text(b.get("token"), 120), b.get("chats"), b.get("enabled") is True)
+        activity.write("WATCH_SAVE", ip=req.ip, enabled=b.get("enabled") is True, ok=res.ok)
+        return _result(res)
+
+    def api_watch_test(self, req, session):
+        b = req.json()
+        return _result(self.engine.watch_test(_text(b.get("token"), 120), b.get("chats")))
+
+    def api_watch_scan(self, req, session):
+        return _result(self.engine.watch_scan())
 
     # ------------------------------------------------------------------ bot protection
     def api_botguard(self, req, session):

@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from .. import (__version__, access, adminlogin, advisor, blocker, botguard, config, vulns, headers, health, htfile, library, netinfo, phpguard, ports, provision,
+from .. import (__version__, access, adminlogin, advisor, blocker, botguard, config, sentry, vulns, headers, health, htfile, library, netinfo, phpguard, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -163,6 +163,7 @@ class LiveEngine:
         self.repair()
         self._start_site_check()
         self._spawn(self._update_loop)
+        self._spawn(self._watch_loop)
 
     def repair(self):
         """Small fixes for things earlier versions left on the server. Run at every start, so pressing "Update now" is enough."""
@@ -170,6 +171,38 @@ class LiveEngine:
             provision.drop_audit_logrotate()
         except Exception:                                       # never stop the panel from starting
             pass
+
+    def _watch_loop(self):
+        """Run the daily break-in watch when it is due (it alerts only on new findings, and only when set up)."""
+        while True:
+            try:
+                if sentry.due():
+                    sentry.run(alert=True)
+            except Exception:
+                pass
+            time.sleep(6 * 3600)
+
+    # ------------------------------------------------------------------ the daily watch for break-ins
+    def _watch_names(self):
+        try:
+            return sentry._names()
+        except (ImportError, OSError):
+            return []
+
+    def watch_state(self):
+        return sentry.state(self._watch_names())
+
+    def watch_save(self, token, chats, enabled):
+        res = sentry.save_config(token, chats, enabled)
+        if res.ok and enabled and sentry.config_ok() and not sentry._load_state().get("last_run"):
+            sentry.scan_start(alert=False)                 # learn the baseline now, quietly
+        return res
+
+    def watch_test(self, token, chats):
+        return sentry.test_message(token, chats)
+
+    def watch_scan(self):
+        return sentry.scan_start(alert=True)
 
     def _update_loop(self):
         """Look for a newer version when the panel starts and then twice a day."""
@@ -1507,6 +1540,46 @@ class DemoEngine:
     def vulns_scan(self, refresh=False):
         self.vuln_scanned = True
         return Result(True, "Checked the websites for known holes.")
+
+    def watch_state(self):
+        if not hasattr(self, "watch_cfg"):
+            self.watch_cfg = {"enabled": True, "has_token": True, "chats": ["123456789", "-1001122334455"], "last_run": time.strftime("%Y-%m-%d %H:%M:%S")}
+        findings = {"blog.example.com": [{"text": "A program (PHP file) is sitting in the uploads folder: wp-content/uploads/2026/invoice.php", "kind": "upload-php"}]}
+        sites = []
+        for name in self.DEMO_SITES:
+            if name == "example.org":
+                sites.append({"site": name, "checked": False, "problem": "WordPress could not be started on this website.", "count": 0, "findings": []})
+                continue
+            f = findings.get(name, [])
+            sites.append({"site": name, "checked": True, "problem": "", "count": len(f), "findings": f})
+        sites.sort(key=lambda r: (-r["count"], r["site"]))
+        c = self.watch_cfg
+        return {"enabled": c["enabled"], "has_token": c["has_token"], "chats": c["chats"], "last_run": c["last_run"],
+                "baseline_done": True, "configured": c["enabled"] and c["has_token"] and bool(c["chats"]),
+                "scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "sites": sites,
+                "total": sum(s["count"] for s in sites)}
+
+    def watch_save(self, token, chats, enabled):
+        from .. import sentry as _sentry
+        chats = _sentry.clean_chats(chats)
+        if enabled and not token and not getattr(self, "watch_cfg", {}).get("has_token"):
+            return Result(False, "That does not look like a bot token.", "token")
+        if enabled and not chats:
+            return Result(False, "Add at least one Telegram ID to send alerts to.", "chats")
+        self.watch_cfg = {"enabled": bool(enabled), "has_token": bool(token) or getattr(self, "watch_cfg", {}).get("has_token", False),
+                          "chats": chats, "last_run": getattr(self, "watch_cfg", {}).get("last_run", "")}
+        return Result(True, "Saved.")
+
+    def watch_test(self, token, chats):
+        from .. import sentry as _sentry
+        if not (token or getattr(self, "watch_cfg", {}).get("has_token")):
+            return Result(False, "That does not look like a bot token.", "token")
+        if not _sentry.clean_chats(chats) and not getattr(self, "watch_cfg", {}).get("chats"):
+            return Result(False, "Add at least one Telegram ID first.", "chats")
+        return Result(True, "Sent. Check your Telegram. (This is the demo, so no real message was sent.)")
+
+    def watch_scan(self):
+        return Result(True, "Checking the websites now.")
 
     def phpguard_state(self):
         sites = []

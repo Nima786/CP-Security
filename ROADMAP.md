@@ -69,8 +69,9 @@ Rule for everything here: explained in plain words, shown on a page, and the own
 - ✅ Block PHP in uploads folders (per website, proved with a harmless test file, put back if the website gets worse)
 - ✅ Known-vulnerable plugin, theme and core check (free WPVulnerability database, cached a day, worst first, with the fixing version)
 - ✅ Bot protection: close the old app-login door (xmlrpc.php), hide private files (logs, dumps, backups, dotfiles), hide account names; per website, each proved before it is kept; the attack blocker also bans guessing at a closed app-login door
-- ⬜ Daily scan for backdoors and changed WordPress files
+- ✅ Daily watch: changed WordPress files (checksums), planted-back-door signatures and PHP left in uploads; baseline on the first run, then alert only on new findings
 - ⬜ Known-vulnerable plugin and theme check
-- ⬜ Alerts (Telegram / email) for new backdoors, a blocker or website going down, certificate expiry
+- ✅ Telegram alerts for newly found back doors (multiple chat IDs; token kept root-only)
+- ⬜ Alerts for a blocker or website going down and certificate expiry
 - ⬜ Off-server backups and a freshness check
 - ⬜ Switching the web firewall from watching to blocking, with WordPress exclusion rules

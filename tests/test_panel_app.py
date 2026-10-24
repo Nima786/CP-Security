@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard", "/api/botguard", "/api/vulns",
+                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard", "/api/botguard", "/api/vulns", "/api/watch",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1555,3 +1555,53 @@ class KnownHolesPage(PanelCase):
     def test_it_needs_a_session(self):
         self.cookie = ""
         self.assertEqual(self.request("GET", "/api/vulns")[0].status, 401)
+
+
+class DailyWatchPage(PanelCase):
+    """The Daily watch page's routes, on the made-up server."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def test_the_page_shows_the_settings_and_findings_without_ever_revealing_the_token(self):
+        resp, data = self.request("GET", "/api/watch")
+        self.assertEqual(resp.status, 200)
+        for key in ("enabled", "has_token", "chats", "last_run", "configured", "sites", "total", "scan"):
+            self.assertIn(key, data)
+        self.assertNotIn("token", data, "the secret bot token is never sent to the browser")
+        self.assertNotIn("telegram_token", json.dumps(data))
+        worst = data["sites"][0]
+        self.assertEqual(worst["site"], "blog.example.com")
+        self.assertEqual(worst["count"], 1)
+
+    def test_turning_it_on_needs_a_token_and_a_chat(self):
+        resp, data = self.request("POST", "/api/watch/save", {"enabled": True, "token": "", "chats": ""})
+        self.assertFalse(data["ok"])
+        resp, data = self.request("POST", "/api/watch/save", {"enabled": True, "token": "123456789:AA" + "x" * 32, "chats": ""})
+        self.assertEqual(data["code"], "chats")
+        resp, data = self.request("POST", "/api/watch/save", {"enabled": True, "token": "123456789:AA" + "x" * 32, "chats": "111\n222"})
+        self.assertTrue(data["ok"], data)
+        _, state = self.request("GET", "/api/watch")
+        self.assertEqual((state["enabled"], state["has_token"], state["chats"]), (True, True, ["111", "222"]))
+
+    def test_it_can_be_turned_off_without_a_token(self):
+        resp, data = self.request("POST", "/api/watch/save", {"enabled": False, "token": "", "chats": ""})
+        self.assertTrue(data["ok"], data)
+
+    def test_a_test_message_and_a_scan_run(self):
+        self.request("POST", "/api/watch/save", {"enabled": True, "token": "123456789:AA" + "x" * 32, "chats": "111"})
+        self.assertTrue(self.request("POST", "/api/watch/test", {"token": "", "chats": "111"})[1]["ok"])
+        self.assertTrue(self.request("POST", "/api/watch/scan", {})[1]["ok"])
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        for path in ("/api/watch/save", "/api/watch/test", "/api/watch/scan"):
+            self.assertEqual(self.request("POST", path, {})[0].status, 403, path)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/watch")[0].status, 401)
+
+    def test_saving_is_written_to_the_activity_log(self):
+        self.request("POST", "/api/watch/save", {"enabled": False, "token": "", "chats": ""})
+        names = [e["event"] for e in self.request("GET", "/api/activity")[1]["events"]]
+        self.assertIn("WATCH_SAVE", names)
