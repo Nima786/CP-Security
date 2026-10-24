@@ -254,16 +254,24 @@ class WafStep(EnvTestCase):
         self.assertNotIn("934", rules)
         self.assertNotIn("944", rules)
 
-    def test_the_firewall_log_is_rotated_and_never_twice(self):
+    def test_no_rotation_file_of_our_own_is_written_for_the_firewall_log(self):
+        # found on the real server: the web server rotates that log itself, and the nightly clean-up may not write
+        # under /usr, so a file of our own only made the clean-up fail every night
         self.run_step()
-        rotate = util.read_text(config.P.logrotate_dir + "/cps-waf")
-        self.assertIn(config.P.audit_log, rotate)
-        self.assertIn("chmod 600", rotate)
+        self.assertFalse(os.path.exists(config.P.logrotate_dir + "/cps-waf"))
 
-    def test_an_existing_rotation_of_the_same_log_is_respected(self):
+    def test_the_file_that_earlier_versions_wrote_is_taken_away(self):
+        self.write(config.P.logrotate_dir + "/cps-waf", "# Written by CP-Security. The firewall's log holds request headers.\n"
+                   + config.P.audit_log + " {\n    daily\n}\n")
+        self.run_step()
+        self.assertFalse(os.path.exists(config.P.logrotate_dir + "/cps-waf"))
+
+    def test_a_rotation_file_that_somebody_else_wrote_is_left_alone(self):
+        self.write(config.P.logrotate_dir + "/cps-waf", "# my own rules\n" + config.P.audit_log + " {\n    weekly\n}\n")
         self.write(config.P.logrotate_dir + "/pb-waf", config.P.audit_log + " {\n    daily\n}\n")
         self.run_step()
-        self.assertFalse(os.path.exists(config.P.logrotate_dir + "/cps-waf"), "two entries would make logrotate skip both")
+        self.assertTrue(os.path.exists(config.P.logrotate_dir + "/cps-waf"))
+        self.assertTrue(os.path.exists(config.P.logrotate_dir + "/pb-waf"))
 
     def test_the_converter_removed_the_skip_instructions(self):
         self.fetch.return_value = make_tarball({
@@ -402,8 +410,8 @@ class Earlier(EnvTestCase):
         self.assertEqual(len(saved), 13, saved)
         for gone in ("/etc/pb-admin-firewall.nft", "/usr/local/sbin/pb-wplogin-feed", "/usr/local/lib/pb-security"):
             self.assertFalse(os.path.exists(config.P.at(gone)), gone)
-        self.assertTrue(os.path.exists(config.P.logrotate_dir + "/cps-waf"),
-                        "the firewall log keeps being rotated once the earlier rotation file is gone")
+        self.assertFalse(os.path.exists(config.P.logrotate_dir + "/cps-waf"),
+                         "the web server rotates the firewall log itself: no rotation file of our own")
         # only the table is still "listed", and only because the pretend firewall tool keeps answering the same
         self.assertEqual([i for i in provision.legacy_items() if "firewall table" not in i], [])
 

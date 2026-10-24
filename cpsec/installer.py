@@ -405,7 +405,7 @@ def uninstall(c, purge=False):
     if c.yes("Also remove the attack blocker settings, the login watcher and the web firewall rules?", default=False):
         util.run(["systemctl", "disable", "--now", provision.SERVICE_FEED], timeout=120)
         for path in (p.systemd_dir + "/" + provision.SERVICE_FEED, p.f2b_jails, p.f2b_ignore,
-                     p.logrotate_dir + "/cps-wp-login", p.logrotate_dir + "/cp-security-panel"):
+                     p.logrotate_dir + "/cps-wp-login", p.logrotate_dir + "/cp-security-panel", p.logrotate_dir + "/cps-waf"):
             if os.path.exists(path):
                 os.remove(path)
         for name in ("cps-wp-login", "cps-mail-auth", "cps-panel"):

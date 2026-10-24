@@ -1375,3 +1375,27 @@ class PhpGuardOnTheRealEngine(PanelCase):
         resp, data = self.request("POST", "/api/phpguard/enable", {"domains": ["a.example.com"], "confirmed": True})
         self.assertFalse(data["ok"])
         self.start.assert_not_called()
+
+
+class RepairsAtStart(EnvTestCase):
+    """Things earlier versions left on the server are fixed when the panel starts, so pressing "Update now" is enough."""
+
+    def engine(self):
+        from cpsec.panel.engine import LiveEngine
+        return LiveEngine()
+
+    def test_the_old_rotation_file_for_the_firewall_log_is_taken_away(self):
+        path = config.P.logrotate_dir + "/cps-waf"
+        self.write(path, "# Written by CP-Security. The firewall's log holds request headers (cookies!), so it stays private.\n/x {\n}\n")
+        self.engine().repair()
+        import os
+        self.assertFalse(os.path.exists(path))
+
+    def test_somebody_elses_file_is_left_and_nothing_stops_the_start(self):
+        import os
+        path = config.P.logrotate_dir + "/cps-waf"
+        self.write(path, "# mine\n")
+        self.engine().repair()
+        self.assertTrue(os.path.exists(path))
+        self.patch("cpsec.provision.drop_audit_logrotate", side_effect=RuntimeError("boom"))
+        self.engine().repair()                                  # a failing repair never stops the panel from starting

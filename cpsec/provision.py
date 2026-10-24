@@ -63,21 +63,7 @@ CRS_SETUP = (
     % CRS_VERSION.replace(".", "")
 )
 
-LOGROTATE_AUDIT = """# Written by CP-Security. The firewall's log holds request headers (cookies!), so it stays private.
-%s {
-    daily
-    rotate 7
-    maxsize 200M
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-    postrotate
-        chmod 600 %s* 2>/dev/null || true
-    endscript
-}
-"""
+OUR_FILE_MARK = "# Written by CP-Security"
 
 SERVICE_FEED = "cps-wplogin-feed.service"
 SERVICE_LOCK = "cps-admin-lock.service"
@@ -559,7 +545,7 @@ class Waf(Step):
             util.write_json(p.waf_settings, {"threshold": threshold, "mode": mode,
                                              "since": time.strftime("%Y-%m-%d")})
             ensure_audit_log()
-            ensure_audit_logrotate()
+            drop_audit_logrotate()
             if not os.path.isdir(p.modsec_data):
                 os.makedirs(p.modsec_data, exist_ok=True)
             if webserver.other_rule_packs():
@@ -583,15 +569,21 @@ class Waf(Step):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def ensure_audit_logrotate():
-    """Rotate the firewall's log, unless some other rotation file (for example the earlier setup's) already does:
-    two entries for one log make logrotate complain and skip."""
-    p = config.P
-    for path in _glob(p.logrotate_dir + "/*"):
-        if os.path.basename(path) != "cps-waf" and p.audit_log in util.read_text(path):
-            return False
-    util.atomic_write(p.logrotate_dir + "/cps-waf", LOGROTATE_AUDIT % (p.audit_log, p.audit_log))
-    return True
+def drop_audit_logrotate():
+    """Take away the rotation file that earlier versions wrote for the firewall's log. Returns True when one was removed.
+
+    Found on the real server: the web server already rotates that log by itself (in 10 MB pieces, kept 30 days), and the
+    system's nightly clean-up (logrotate) is not allowed to write under /usr, where the log lives. So our extra file only made
+    the clean-up fail every night. The log folder is closed to everybody except root and the web server, so the copies stay
+    private without it. Only a file that we wrote is removed."""
+    path = config.P.logrotate_dir + "/cps-waf"
+    try:
+        if util.read_text(path).startswith(OUR_FILE_MARK):
+            os.remove(path)
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def ensure_audit_log():
@@ -678,7 +670,7 @@ class Retire(Step):
                      + _glob(p.at("/usr/local/sbin/pb-*")) + _glob(p.logrotate_dir + "/pb-*")
                      + _glob(p.at("/usr/local/lib/pb-security"))):
             put_away(path)
-        ensure_audit_logrotate()
+        drop_audit_logrotate()
         if os.path.isdir(p.legacy_conf_dir):
             put_away(p.legacy_conf_dir)
         return Result(True, "The earlier setup was put away. Its files are in %s." % backup)

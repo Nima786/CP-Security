@@ -41,6 +41,9 @@ Things that cost hours to discover. They explain several design choices, so they
   `anomaly_score_pl1`, not in `anomaly_score`, and the stock rule depends on macro expansion that this engine does
   not do reliably. The threshold is a plain number, so an unset value can never block everything.
 * The audit log holds request headers (cookies!). Keep it `0600`, owned by the web server user.
+* Do not add a logrotate rule for the audit log. LiteSpeed Enterprise rolls it itself (10 MB pieces, `keepDays` 30), and Ubuntu's
+  `logrotate.service` runs with `ProtectSystem=full`, so `/usr/local/lsws/logs` is read-only to it: the rule fails every night and
+  marks the whole clean-up as failed. The copies stay private because `/usr/local/lsws/logs` is `0750 root:nobody`.
 
 ## Found by checking the first real installation
 * fail2ban 0.11: when a reload changes the ban action of a protection that already exists (the Ubuntu default

@@ -160,8 +160,16 @@ class LiveEngine:
 
     def warm_up(self):
         """Called once when the panel starts, so the first visitor does not wait."""
+        self.repair()
         self._start_site_check()
         self._spawn(self._update_loop)
+
+    def repair(self):
+        """Small fixes for things earlier versions left on the server. Run at every start, so pressing "Update now" is enough."""
+        try:
+            provision.drop_audit_logrotate()
+        except Exception:                                       # never stop the panel from starting
+            pass
 
     def _update_loop(self):
         """Look for a newer version when the panel starts and then twice a day."""

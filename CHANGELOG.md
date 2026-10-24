@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6
+* **Fixed: the server's nightly log clean-up failed every night since 21 October.** Found during a health check. Earlier versions
+  added a rotation rule for the web firewall's log, but the web server already rotates that log by itself (in 10 MB pieces, kept 30
+  days), and the system's clean-up is not allowed to write in the folder where that log lives. So the extra rule only made the whole
+  clean-up end with an error. The panel now removes that rule by itself when it starts (pressing "Update now" is enough), never writes
+  it again, and the uninstaller takes it away too. A rule of the same name that somebody else wrote is left alone. The log and its old
+  copies stay private: their folder is closed to everybody except root and the web server (checked on the server: a website's own user
+  cannot read them). Already fixed on the server; the clean-up finished normally right afterwards.
 ## 0.9.5
 * **No PHP in uploads** (new page, one switch per website and one for all). The uploads folder is where a website keeps its photos and
   documents. The most common bot attack on WordPress uses a plugin hole to save a small program (a PHP file) there and then opens it by
