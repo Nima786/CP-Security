@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard",
+                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard", "/api/botguard",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1399,3 +1399,118 @@ class RepairsAtStart(EnvTestCase):
         self.assertTrue(os.path.exists(path))
         self.patch("cpsec.provision.drop_audit_logrotate", side_effect=RuntimeError("boom"))
         self.engine().repair()                                  # a failing repair never stops the panel from starting
+
+
+class BotGuardPage(PanelCase):
+    """The Bot protection page's routes, on the made-up server."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def rule(self, site, key):
+        rows = {r["site"]: r for r in self.request("GET", "/api/botguard")[1]["sites"]}
+        return rows[site]["rules"][key]
+
+    def test_the_page_gets_every_website_with_each_switch_and_what_a_stranger_sees(self):
+        resp, data = self.request("GET", "/api/botguard")
+        self.assertEqual(resp.status, 200)
+        for key in ("scan", "rules", "sites", "job"):
+            self.assertIn(key, data)
+        self.assertEqual([r["key"] for r in data["rules"]], ["xmlrpc", "files", "users"])
+        self.assertEqual(self.rule("shop.example.com", "xmlrpc")["status"], "on")
+        blog = {k: self.rule("blog.example.com", k) for k in ("xmlrpc", "files", "users")}
+        self.assertTrue(blog["xmlrpc"]["open"])
+        self.assertEqual(blog["files"]["exposed"], ["/wp-content/debug.log"])
+        self.assertEqual(blog["users"]["shown"], ["admin"])
+        org = [s for s in data["sites"] if s["site"] == "example.org"][0]
+        self.assertFalse(org["checked"])
+
+    def test_switching_on_needs_an_explicit_yes_and_a_known_switch(self):
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "files", "domains": ["blog.example.com"]})
+        self.assertEqual((resp.status, data["code"]), (409, "needs_confirm"))
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "everything", "domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "invalid"))
+        self.assertEqual(self.rule("blog.example.com", "files")["status"], "off")
+
+    def test_one_website_can_be_switched_on_and_off_again(self):
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "files", "domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        row = self.rule("blog.example.com", "files")
+        self.assertEqual((row["status"], row["exposed"]), ("on", []))
+        self.assertEqual(self.rule("blog.example.com", "xmlrpc")["status"], "off", "the other switches are not touched")
+        job = self.request("GET", "/api/botguard")[1]["job"]
+        self.assertEqual((job["rule"], job["action"], job["counts"]["done"]), ("files", "enable", 1))
+        resp, data = self.request("POST", "/api/botguard/disable", {"rule": "files", "domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.rule("blog.example.com", "files")["status"], "off")
+
+    def test_all_websites_means_the_ones_that_need_it(self):
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "users", "all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        for site in ("blog.example.com", "shop.example.com", "staging.example.com"):
+            self.assertEqual(self.rule(site, "users")["status"], "on", site)
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "users", "all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+
+    def test_the_websites_must_be_named_or_all(self):
+        for body in ({"rule": "xmlrpc", "confirmed": True}, {"rule": "xmlrpc", "domains": [], "confirmed": True}, {"rule": "xmlrpc", "domains": "x", "confirmed": True}):
+            self.assertEqual(self.request("POST", "/api/botguard/enable", body)[0].status, 400, body)
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        for p in ("/api/botguard/enable", "/api/botguard/disable"):
+            self.assertEqual(self.request("POST", p, {"rule": "xmlrpc", "all": True, "confirmed": True})[0].status, 403, p)
+        self.assertEqual(self.request("POST", "/api/botguard/scan", {})[0].status, 403)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/botguard")[0].status, 401)
+
+    def test_switching_is_written_to_the_activity_log_with_the_switch(self):
+        self.request("POST", "/api/botguard/enable", {"rule": "xmlrpc", "domains": ["blog.example.com"], "confirmed": True})
+        self.request("POST", "/api/botguard/disable", {"rule": "xmlrpc", "domains": ["blog.example.com"], "confirmed": True})
+        events = self.request("GET", "/api/activity")[1]["events"]
+        names = [e["event"] for e in events]
+        self.assertIn("BOT_GUARD_ENABLE", names)
+        self.assertIn("BOT_GUARD_DISABLE", names)
+        self.assertIn("xmlrpc", json.dumps(events))
+
+
+class BotGuardOnTheRealEngine(PanelCase):
+    """The real engine works out 'all websites' per switch from what the page shows."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None, clock=lambda: self.now[0])
+        self.login()
+
+        def row(name, xmlrpc, files):
+            return {"site": name, "checked": True, "problem": "", "rules": {"xmlrpc": {"status": xmlrpc}, "files": {"status": files}, "users": {"status": "off"}}}
+        rows = [row("a.example.com", "off", "on"), row("b.example.com", "on", "off"), row("c.example.com", "changed", "changed"),
+                row("d.example.com", "unknown", "unknown"), row("e.example.com", "unsupported", "off")]
+        self.patch("cpsec.botguard._names", return_value=[r["site"] for r in rows])
+        self.patch("cpsec.botguard.state", return_value={"scan": {"status": "done", "finished": ""}, "rules": [], "sites": rows})
+        from cpsec.util import Result
+        self.start = self.patch("cpsec.botguard.start", return_value=Result(True, "Started"))
+
+    def test_turn_on_for_all_is_worked_out_per_switch(self):
+        self.request("POST", "/api/botguard/enable", {"rule": "xmlrpc", "all": True, "confirmed": True})
+        self.start.assert_called_with("enable", "xmlrpc", ["a.example.com", "c.example.com"])
+        self.request("POST", "/api/botguard/enable", {"rule": "files", "all": True, "confirmed": True})
+        self.start.assert_called_with("enable", "files", ["b.example.com", "c.example.com", "e.example.com"])
+
+    def test_turn_off_for_all_means_the_ones_that_have_it(self):
+        self.request("POST", "/api/botguard/disable", {"rule": "xmlrpc", "all": True, "confirmed": True})
+        self.start.assert_called_once_with("disable", "xmlrpc", ["b.example.com", "c.example.com"])
+
+    def test_an_unknown_switch_is_refused_before_anything_starts(self):
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "all-of-them", "all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "invalid"))
+        self.start.assert_not_called()
+
+    def test_it_waits_while_the_setup_is_running(self):
+        self.engine.runner.running = lambda: True
+        resp, data = self.request("POST", "/api/botguard/enable", {"rule": "xmlrpc", "domains": ["a.example.com"], "confirmed": True})
+        self.assertFalse(data["ok"])
+        self.start.assert_not_called()

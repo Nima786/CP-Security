@@ -11,6 +11,12 @@ in a fixed format:
 A correct password gets a redirect (302), so it is never copied. Cloudflare's own addresses are never
 copied either, so the blocker can never shut Cloudflare out.
 
+The old app-login door (xmlrpc.php) is counted too, but only where the website REFUSES it (403): a sender that keeps
+posting passwords to a closed door is a bot by definition, and nobody who uses that door for real is ever counted
+(where it is open, its answer cannot tell a wrong password from a right one). Those lines name the door:
+
+    2026-10-24 06:48:24 WPLOGIN 203.0.113.9 shop.example.com/xmlrpc 403
+
 Run as a service:  python3 -m cpsec.feed
 """
 import glob
@@ -24,6 +30,7 @@ from . import config, netinfo
 
 # The request may or may not be in quotes: CyberPanel's LiteSpeed writes it without, the usual "combined" format with.
 LINE = re.compile(r'^(\S+) \S+ \S+ \[[^\]]+\] "?POST /wp-login\.php(?:\?[^ "]*)? HTTP/[\d.]+"? (\d{3}) ')
+XMLRPC = re.compile(r'^(\S+) \S+ \S+ \[[^\]]+\] "?POST /+xmlrpc\.php(?:\?[^ "]*)? HTTP/[\d.]+"? (\d{3}) ')
 LOG_GLOB = "/home/*/logs/*.access_log"
 POLL_SECONDS = 2.0
 
@@ -43,9 +50,13 @@ def clean_domain(text):
 
 def convert(line, domain, now=None):
     """One web-server log line -> one tidy line, or None when it is not a failed login."""
+    door = ""
     m = LINE.match(line)
     if not m or m.group(2) not in ("200", "401"):
-        return None
+        m = XMLRPC.match(line)
+        if not m or m.group(2) != "403":
+            return None
+        door = "/xmlrpc"
     ip = m.group(1)
     try:
         ipaddress.ip_address(ip)
@@ -54,7 +65,7 @@ def convert(line, domain, now=None):
     if netinfo.is_cloudflare(ip):
         return None
     stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
-    return "%s WPLOGIN %s %s %s\n" % (stamp, ip, clean_domain(domain), m.group(2))
+    return "%s WPLOGIN %s %s%s %s\n" % (stamp, ip, clean_domain(domain), door, m.group(2))
 
 
 class Follower:

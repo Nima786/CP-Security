@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from .. import (__version__, access, adminlogin, advisor, blocker, config, headers, health, htfile, library, netinfo, phpguard, ports, provision,
+from .. import (__version__, access, adminlogin, advisor, blocker, botguard, config, headers, health, htfile, library, netinfo, phpguard, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -521,6 +521,36 @@ class LiveEngine:
     def logins_open(self, site, to=""):
         return adminlogin.make_link(site, to)
 
+    # ------------------------------------------------------------------ bot protection (three switches per website)
+    def _botguard_names(self):
+        try:
+            return botguard._names()
+        except (ImportError, OSError):                          # not a Linux server: there are no websites to list
+            return []
+
+    def botguard_state(self):
+        if botguard.scan_state()["status"] == "idle":           # first look after a restart of the panel
+            botguard.scan_start()
+        data = botguard.state(self._botguard_names())
+        data["job"] = botguard.job_state()
+        return data
+
+    def botguard_scan(self):
+        return botguard.scan_start()
+
+    def botguard_run(self, action, key, names):
+        busy = self._guard()
+        if busy:
+            return busy
+        if key not in botguard.RULES:
+            return Result(False, "Unknown protection.", "invalid")
+        if names is None:                                       # "all": the ones that need it (on) or have it (off)
+            current = {s["site"]: s["rules"][key]["status"] for s in botguard.state(self._botguard_names())["sites"]}
+            names = [n for n, st in current.items() if (st in ("off", "changed") if action == "enable" else st in ("on", "changed"))]
+            if not names:
+                return Result(False, "There is nothing to turn %s." % ("on" if action == "enable" else "off"), "none")
+        return botguard.start(action, key, names)
+
     # ------------------------------------------------------------------ no PHP in the uploads folders
     def _phpguard_names(self):
         try:
@@ -700,6 +730,11 @@ class DemoEngine:
         self.login_helper, self.login_choice = {"shop.example.com": "installed", "staging.example.com": "changed"}, {}
         self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.guard_status = {"shop.example.com": "on", "staging.example.com": "changed", "blog.example.com": "off"}
+        self.bot_status = {("shop.example.com", "xmlrpc"): "on", ("staging.example.com", "users"): "changed"}
+        self.bot_seen = {"blog.example.com": {"open": True, "exposed": ["/wp-content/debug.log"], "shown": ["admin"]},
+                         "staging.example.com": {"open": False, "exposed": [], "shown": ["dev"]},
+                         "shop.example.com": {"open": False, "exposed": [], "shown": ["owner"]}}
+        self.bot_job = {"status": "idle", "action": "", "rule": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.guard_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.copy_keep = 1                                    # saved copies from earlier updates (kind, name, time stamp, size in KB)
         self.copy_data = {"shop.example.com": [("plugin", "woocommerce", "20261019-093000", 31200), ("plugin", "woocommerce", "20261012-081500", 30900),
@@ -1372,6 +1407,49 @@ class DemoEngine:
         if self.login_helper.get(site) != "installed":
             return Result(False, "The helper is not installed (or was changed) on this website. Install it first.", "not_installed"), ""
         return Result(True, "Opening %s as %s." % (site, self.login_choice.get(site) or self.DEMO_ADMINS[site][0]["login"])), "https://%s/?cps-login=demo-link" % site
+
+    def botguard_state(self):
+        sites = []
+        for name in self.DEMO_SITES:
+            if name == "example.org":
+                sites.append({"site": name, "checked": False, "problem": "The website's settings file cannot be read, so it is left alone.",
+                              "rules": {k: {"status": "unsupported"} for k in botguard.KEYS}})
+                continue
+            seen = self.bot_seen.get(name, {})
+            rules = {}
+            for key in botguard.KEYS:
+                status = self.bot_status.get((name, key), "off")
+                row = {"status": status}
+                if key == "xmlrpc":
+                    row["open"] = status != "on" and seen.get("open", False)
+                elif key == "files":
+                    row["exposed"] = [] if status == "on" else list(seen.get("exposed", []))
+                else:
+                    row["shown"] = [] if status == "on" else list(seen.get("shown", []))
+                rules[key] = row
+            sites.append({"site": name, "checked": True, "problem": "", "rules": rules})
+        return {"scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")},
+                "rules": [{"key": k, "title": botguard.RULES[k]["title"]} for k in botguard.KEYS], "sites": sites, "job": self.bot_job}
+
+    def botguard_scan(self):
+        return Result(True, "Looking at the websites.")
+
+    def botguard_run(self, action, key, names):
+        if key not in botguard.RULES:
+            return Result(False, "Unknown protection.", "invalid")
+        current = {s["site"]: s["rules"][key]["status"] for s in self.botguard_state()["sites"] if s["checked"]}
+        if names is None:
+            names = [n for n, st in current.items() if (st in ("off", "changed") if action == "enable" else st in ("on", "changed"))]
+        names = [n for n in names if n in current]
+        if not names:
+            return Result(False, "There is nothing to turn %s." % ("on" if action == "enable" else "off"), "none")
+        title = botguard.RULES[key]["title"]
+        for n in names:
+            self.bot_status[(n, key)] = "on" if action == "enable" else "off"
+        self.bot_job = {"status": "done", "action": action, "rule": key, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "items": [{"site": n, "status": "done", "step": "", "message": ("%s: on for %s, and tested." if action == "enable" else "%s: off for %s (as before).") % (title, n)} for n in names],
+                        "counts": {"waiting": 0, "working": 0, "done": len(names), "failed": 0}}
+        return Result(True, "Started on %d website%s." % (len(names), "" if len(names) == 1 else "s"))
 
     def phpguard_state(self):
         sites = []

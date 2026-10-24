@@ -151,6 +151,10 @@ class App:
             ("POST", "/api/logins/remove"): (self.api_logins_remove, True),
             ("POST", "/api/logins/user"): (self.api_logins_user, True),
             ("POST", "/api/logins/open"): (self.api_logins_open, True),
+            ("GET", "/api/botguard"): (self.api_botguard, True),
+            ("POST", "/api/botguard/scan"): (self.api_botguard_scan, True),
+            ("POST", "/api/botguard/enable"): (self.api_botguard_enable, True),
+            ("POST", "/api/botguard/disable"): (self.api_botguard_disable, True),
             ("GET", "/api/phpguard"): (self.api_phpguard, True),
             ("POST", "/api/phpguard/scan"): (self.api_phpguard_scan, True),
             ("POST", "/api/phpguard/enable"): (self.api_phpguard_enable, True),
@@ -717,6 +721,29 @@ class App:
         res, url = self.engine.logins_open(site, to)
         activity.write("ADMIN_LOGIN_OPEN", ip=req.ip, site=site, ok=res.ok, code=res.code)
         return _result(res, url=url)
+
+    # ------------------------------------------------------------------ bot protection
+    def api_botguard(self, req, session):
+        return _json(200, self.engine.botguard_state())
+
+    def api_botguard_scan(self, req, session):
+        return _result(self.engine.botguard_scan())
+
+    def _botguard_run(self, req, action):
+        b = req.json()
+        if b.get("confirmed") is not True:
+            return _json(409, {"ok": False, "code": "needs_confirm", "message": "Please confirm."})
+        key = _text(b.get("rule"), 20)
+        names = _website_list(b)
+        res = self.engine.botguard_run(action, key, names)
+        activity.write("BOT_GUARD_" + action.upper(), ip=req.ip, rule=key, count="all" if names is None else len(names), ok=res.ok)
+        return _result(res)
+
+    def api_botguard_enable(self, req, session):
+        return self._botguard_run(req, "enable")
+
+    def api_botguard_disable(self, req, session):
+        return self._botguard_run(req, "disable")
 
     # ------------------------------------------------------------------ no PHP in the uploads folders
     def api_phpguard(self, req, session):

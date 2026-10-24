@@ -141,3 +141,37 @@ class TheRealLogFormat(EnvTestCase):
         match = re.search(regex.replace("\\\\", "\\"), line)
         self.assertTrue(match, line)
         self.assertEqual(match.group("host"), "203.0.113.12")
+
+
+class TheOldAppLoginDoor(EnvTestCase):
+    """Password guessing through xmlrpc.php: counted only where the website refuses that door."""
+
+    REFUSED = "203.0.113.20 - - [24/Oct/2026:06:48:24 +0100] POST /xmlrpc.php HTTP/1.1 403 46 - Mozilla/5.0\n"
+
+    def test_a_post_to_a_closed_door_is_counted_and_named(self):
+        out = feed.convert(self.REFUSED, "shop.example.com")
+        self.assertRegex(out, r"WPLOGIN 203\.0\.113\.20 shop\.example\.com/xmlrpc 403$")
+
+    def test_a_doubled_slash_and_a_query_still_count(self):
+        for line in (self.REFUSED.replace("POST /xmlrpc.php", "POST //xmlrpc.php"),
+                     self.REFUSED.replace("POST /xmlrpc.php", "POST /xmlrpc.php?rsd")):
+            self.assertIsNotNone(feed.convert(line, "shop.example.com"), line)
+
+    def test_an_open_door_is_never_counted(self):
+        # where the door is open, a wrong and a right password both answer 200: nobody may be banned for using it
+        for code in ("200", "302", "405", "500"):
+            self.assertIsNone(feed.convert(self.REFUSED.replace(" 403 ", " %s " % code), "shop.example.com"), code)
+
+    def test_reading_the_door_is_not_counted(self):
+        self.assertIsNone(feed.convert(self.REFUSED.replace("POST", "GET"), "shop.example.com"))
+
+    def test_cloudflare_is_never_counted(self):
+        self.assertIsNone(feed.convert(self.REFUSED.replace("203.0.113.20", "104.16.0.1"), "shop.example.com"))
+
+    def test_the_line_still_matches_the_blockers_filter(self):
+        import re
+        from cpsec import blocker
+        regex = blocker.FILTER_WP_LOGIN.split("failregex = ")[1].split("\n")[0].replace("<HOST>", r"(?P<host>\S+)")
+        match = re.search(regex.replace("\\\\", "\\"), feed.convert(self.REFUSED, "shop.example.com"))
+        self.assertTrue(match)
+        self.assertEqual(match.group("host"), "203.0.113.20")

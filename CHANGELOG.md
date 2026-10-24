@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.7
+* **Bot protection** (new page): three switches per website against what bots try on every WordPress website, every day. Each one
+  shows, website by website, what a stranger can see right now, and is turned on per website or for all.
+  * **Close the old app-login door.** WordPress has a second login door for publishing from apps (xmlrpc.php). It takes a user name and
+    password like the login page, a hidden login address does not protect it, and one request can try hundreds of passwords. The logs
+    held about 80,000 such posts; it was still open on 4 websites. Only the WordPress phone app and Jetpack need it.
+  * **Hide private files:** error logs, database dumps, backup copies of the settings file, and hidden files such as .env or .git.
+    The folder that certificate renewals use stays open. One website's error log could be downloaded by anybody.
+  * **Hide account names.** WordPress tells anybody the account names of its authors (through its REST door and through
+    `?author=1`); bots read them, then only have to guess the password. People who are signed in, and the dashboard, are not affected.
+  * **Proved before it is kept, as everywhere else:** what the switch must refuse has to be refused (private files are proved with
+    harmless test files, which are always removed), and the website, its login page and what must keep working (the REST door, signed-in
+    people, certificate renewals) have to answer as before. Otherwise the website's settings file is put back exactly as it was. Each
+    switch is one marked block of lines; lines that were already there are never changed, and "Turn off" removes only that block.
+* **The attack blocker now also bans password guessing at the old app-login door**, but only where the website refuses that door: a
+  sender that keeps posting passwords to a closed door is a bot by definition, and nobody who really uses an open door is ever counted.
+* Done on the server: the app-login door was closed on fs.moradizweb.com, goran.moradizweb.com, matin.moradizweb.com and
+  test.homplast.com; the error log of test.homplast.com was hidden; account names were hidden on the 11 websites that showed them (4
+  through the REST door, the others through `?author=1`). Every change was tested by the panel and every website answered afterwards.
 ## 0.9.6
 * **Fixed: the server's nightly log clean-up failed every night since 21 October.** Found during a health check. Earlier versions
   added a rotation rule for the web firewall's log, but the web server already rotates that log by itself (in 10 MB pieces, kept 30

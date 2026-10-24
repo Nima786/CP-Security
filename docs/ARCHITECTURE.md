@@ -123,6 +123,16 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
   an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
   the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **Bot protection (`botguard.py`).** Three independent marked blocks (`# BEGIN CP-Security bot-<key>`) at the top of the website's
+  root `.htaccess`, written as the site user through the same read/write/put-back helpers as `phpguard.py`. `xmlrpc`:
+  `<Files "xmlrpc.php"> Require all denied`. `files`: a `FilesMatch` for logs, dumps, backup and editor copies, `wp-config.php.*`,
+  `error_log`, plus `RewriteRule (^|/)\.(?!well-known(/|$)) - [F]` for dotfiles (certificate renewals stay open). `users`: refuse
+  `/wp-json/wp/v2/users` and `rest_route=/wp/v2/users` (also URL-encoded) and `?author=N` outside `/wp-admin/`, only without a
+  `wordpress_logged_in_` cookie. Proof per switch: refused = 403 (files: two random test files, one a dotfile, that answered 200
+  with their marker before); kept = home/login no worse, plus REST root and the signed-in users list (users) and a test file in
+  `.well-known` (files) not newly refused. The scan reports what a stranger can see now: WordPress answering at xmlrpc.php,
+  private paths that answer 200, and slugs from the users list or the `?author=1` redirect. The login watcher (`feed.py`) also
+  copies `POST /xmlrpc.php` lines answered 403 (`<site>/xmlrpc` in the tidy line), never ones the door answered.
 * **No PHP in uploads (`phpguard.py`).** The uploads folder comes from WordPress (`wp_get_upload_dir()['basedir']`) and must be inside the
   website's web folder (otherwise there is nothing to protect). The rule is a marked block at the top of `<uploads>/.htaccess`:
   `<FilesMatch "(?i)\.(php[0-9]?|phtml|phar|pht|phps|shtml?)$"> Require all denied </FilesMatch>` (both this and the older

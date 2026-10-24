@@ -30,6 +30,7 @@
     access: 'M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z',
     firewall: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z',
     logins: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
+    botguard: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 6a2 2 0 110 4 2 2 0 010-4zm-4 9.5c0-2 2.7-3 4-3s4 1 4 3V17H8v-.5z',
     phpguard: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM9.4 18.4L8 17l2.6-2.6L8 11.8l1.4-1.4 2.6 2.6 2.6-2.6 1.4 1.4-2.6 2.6L16 17l-1.4 1.4-2.6-2.6-2.6 2.6zM13 9V3.5L18.5 9H13z',
     updates: 'M17.65 6.35A7.96 7.96 0 0012 4a8 8 0 108 8h-2a6 6 0 11-1.76-4.24L13 11h7V4l-2.35 2.35z',
     settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
@@ -175,6 +176,7 @@
     ['serverfw', 'Server firewall', 'serverfw', 'Server FW', 'Protection', false],
     ['headers', 'Security headers', 'headers', 'Headers', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
+    ['botguard', 'Bot protection', 'botguard', 'Bots', 'Protection', false],
     ['phpguard', 'No PHP in uploads', 'phpguard', 'Uploads', 'Protection', false],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
     ['logins', 'One-click login', 'logins', 'Login', 'Protection', false],
@@ -1588,6 +1590,138 @@
       pageHead('One-click login', 'Open the dashboard of any website from here, signed in, without typing a password.'), holder);
   }
 
+  // ------------------------------------------------------------------ bot protection: three switches per website
+  const BOT_INFO = {
+    xmlrpc: {
+      what: 'WordPress has a second, older door for logging in, made for publishing from apps (xmlrpc.php). It takes a user name and password like the login page, and a hidden login address does not protect it. Bots send password guesses to it all day, hundreds in one request. Closing it changes nothing for visitors or for you in the dashboard; only the WordPress phone app and Jetpack need it.',
+      need: r => r.open, needText: () => 'Open: bots can guess passwords here', fineText: 'Already refused by the server',
+      onText: 'Closed', button: 'Close it', all: 'Close it on', offButton: 'Open it again',
+    },
+    files: {
+      what: 'Bots ask every website for error logs, database dumps, backup copies of the settings file and hidden files such as .env. One of these can hand over passwords or show how the website is built. This refuses those files to everybody; photos, pages, downloads and certificate renewals work as before.',
+      need: r => (r.exposed || []).length, needText: r => 'Anyone can download: ' + r.exposed.join(', '), fineText: 'Nothing private found right now',
+      onText: 'Hidden', button: 'Hide them', all: 'Hide them on', offButton: 'Turn off',
+    },
+    users: {
+      what: 'WordPress tells anybody who asks the account names of the people who write on the website. Bots read them first, so they only have to guess the password. This hides them from strangers; nothing changes for people who are signed in or for the dashboard.',
+      need: r => (r.shown || []).length, needText: r => 'Shows account names to anybody: ' + r.shown.join(', '), fineText: 'No account names shown right now',
+      onText: 'Hidden', button: 'Hide them', all: 'Hide them on', offButton: 'Turn off',
+    },
+  };
+
+  function renderBotGuard(data, ctl) {
+    const sites = data.sites || [];
+    const rules = data.rules || [];
+    const key = ctl.tab;
+    const info = BOT_INFO[key];
+    const job = data.job || { status: 'idle', items: [] };
+    const working = job.status === 'running';
+    const scanning = data.scan && data.scan.status === 'running';
+    const inJob = job.rule === key ? Object.fromEntries((job.items || []).map(i => [i.site, i])) : {};
+    const ruleOf = s => (s.rules || {})[key] || { status: 'unknown' };
+    const on = sites.filter(s => ruleOf(s).status === 'on');
+    const canTurnOn = sites.filter(s => s.checked && ['off', 'changed'].includes(ruleOf(s).status));
+    const needing = k => sites.filter(s => s.checked && ((s.rules || {})[k] || {}).status !== 'on' && BOT_INFO[k].need((s.rules || {})[k] || {})).length;
+
+    const tabs = h('div', { class: 'choices' }, rules.map(r => {
+      const n = needing(r.key);
+      const done = sites.filter(s => ((s.rules || {})[r.key] || {}).status === 'on').length;
+      return h('button', { class: 'choice', type: 'button', 'aria-pressed': String(r.key === key), onclick: () => ctl.pick(r.key) },
+        h('div', { class: 'title' }, r.title),
+        h('div', { class: 'desc' }, n ? badge(n + ' website' + (n > 1 ? 's' : '') + ' need it', 'warn') : badge('nothing found', 'ok'), ' ', h('span', { text: done + ' of ' + sites.length + ' on' })));
+    }));
+
+    const rows = sites.map(s => {
+      const r = ruleOf(s);
+      const ji = working ? inJob[s.site] : null;
+      const label = { on: [info.onText, 'ok'], off: ['Off', ''], changed: ['Changed by hand', 'warn'], unknown: ['Not read yet', ''], unsupported: ['Cannot be used here', 'warn'] }[r.status] || [r.status, ''];
+      const needs = r.status !== 'on' && s.checked && info.need(r);
+      const buttons = [];
+      if (s.checked && (r.status === 'off' || r.status === 'changed')) buttons.push(h('button', { class: 'btn' + (needs ? ' primary' : ''), type: 'button', disabled: working, 'aria-label': info.button + ' on ' + s.site, text: r.status === 'changed' ? 'Put it right' : info.button, onclick: () => ctl.enable([s.site]) }));
+      if (r.status === 'on' || r.status === 'changed') buttons.push(h('button', { class: 'btn', type: 'button', disabled: working, 'aria-label': info.offButton + ' on ' + s.site, text: info.offButton, onclick: () => ctl.disable([s.site]) }));
+      const note = !s.checked ? s.problem : r.status === 'on' ? '' : needs ? info.needText(r) : (r.status === 'off' ? info.fineText : '');
+      const tone = r.status === 'on' ? ' is-ready' : (needs || r.status === 'changed' ? ' is-warn' : '');
+      return h('div', { class: 'guard-row' + tone },
+        h('div', { class: 'lr-site' },
+          h('strong', { class: 'lr-name', text: s.site }),
+          ji ? (ji.status === 'working' ? workingBadge('Working\u2026') : ji.status === 'waiting' ? badge('In line', '') : badge(ji.status === 'done' ? 'done' : 'failed', ji.status === 'done' ? 'ok' : 'bad')) : badge(label[0], label[1]),
+          ji && ji.status === 'working' && ji.step ? h('div', { class: 'lr-note', text: ji.step }) : null,
+          note ? h('div', { class: 'lr-note' + (needs ? ' warn-text' : ''), text: note }) : null),
+        buttons.length ? h('div', { class: 'lr-actions' }, buttons) : null);
+    });
+
+    const titleOf = k => (rules.find(r => r.key === k) || { title: k }).title;
+    const last = job.status !== 'idle' && (job.items || []).length ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, working ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
+        h('h2', { 'aria-live': 'polite', text: (working ? 'Working\u2026 ' : 'Finished: ') + titleOf(job.rule) + (job.action === 'disable' ? ' (off)' : '') }),
+        job.counts.done ? badge(job.counts.done + ' done', 'ok') : null, job.counts.failed ? badge(job.counts.failed + ' failed', 'bad') : null),
+      table(['Website', 'Result'], job.items.map(i => h('tr', {}, h('td', {}, h('strong', { class: 'lr-name', text: i.site })),
+        h('td', {}, i.status === 'working' ? workingBadge('Working\u2026') : i.status === 'waiting' ? badge('In line', '') : badge(i.status === 'done' ? 'done' : 'failed', i.status === 'done' ? 'ok' : 'bad'),
+          h('div', { class: 'small ' + (i.status === 'failed' ? '' : 'muted'), text: i.status === 'working' ? i.step : i.message })))), '')) : null;
+
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card login-intro' },
+        h('p', { text: 'Three small protections against what bots try on every WordPress website, every day. Choose one to see which websites need it.' }),
+        tabs,
+        h('p', { class: 'muted small', style: 'margin:.8rem 0 0', text: 'Each one is tested on the website before it is kept: what it must refuse has to be refused, and the website, its login page and what must keep working have to answer as before. Otherwise the website is put back as it was. You can turn each one off again at any time.' })),
+      last,
+      h('section', { class: 'card flush' },
+        h('div', { class: 'card-head' }, h('h2', { text: titleOf(key) }), badge(on.length + ' of ' + sites.length + ' on', on.length ? 'ok' : ''),
+          h('button', { class: 'btn small right', type: 'button', disabled: scanning || working, text: 'Check again', onclick: ctl.rescan })),
+        h('div', { class: 'copies-intro' }, h('p', { text: info.what }),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', type: 'button', disabled: working || !canTurnOn.length, text: canTurnOn.length ? info.all + ' ' + canTurnOn.length + ' website' + (canTurnOn.length > 1 ? 's' : '') + '\u2026' : 'On everywhere', onclick: () => ctl.enable(null, canTurnOn.length) }),
+            on.length ? h('button', { class: 'btn', type: 'button', disabled: working, text: 'Turn off for all ' + on.length + '\u2026', onclick: () => ctl.disable(null, on.length) }) : null,
+            scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at the websites\u2026') : null)),
+        rows.length ? rows : empty('No WordPress websites were found on this server.')));
+  }
+
+  async function viewBotGuard() {
+    let data = (await api('/api/botguard')).data;
+    const holder = h('div', {}, null);
+    // the protection you looked at last stays open, also after reloading the page
+    if (!S.botTab) { try { S.botTab = sessionStorage.getItem('cps-bot-tab') || ''; } catch (e) { S.botTab = ''; } }
+    if (!BOT_INFO[S.botTab]) S.botTab = 'xmlrpc';
+    const paint = () => holder.replaceChildren(renderBotGuard(data, ctl));
+    const poll = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'botguard') { clearInterval(S.pollTimer); return; }
+        const was = data.job.status;
+        data = (await api('/api/botguard')).data;
+        paint();
+        if (was === 'running' && data.job.status !== 'running') toast(data.job.counts.failed ? 'Finished. Some websites need a look.' : 'Finished.', data.job.counts.failed ? 'bad' : 'ok');
+        if (data.scan.status !== 'running' && data.job.status !== 'running') clearInterval(S.pollTimer);
+      }, 1500);
+    };
+    const refresh = async () => { data = (await api('/api/botguard')).data; paint(); if (data.scan.status === 'running' || data.job.status === 'running') poll(); };
+
+    async function run(action, names, count) {
+      const key = S.botTab;
+      const title = (data.rules.find(r => r.key === key) || { title: key }).title;
+      const many = names ? names.length : count;
+      const who = names ? names[0] + (names.length > 1 ? ' and ' + (names.length - 1) + ' more' : '') : many + ' website' + (many > 1 ? 's' : '');
+      const turningOn = action === 'enable';
+      const content = h('div', {},
+        h('p', { text: turningOn ? title + ' on ' + who + ', one website at a time.' : title + ': turned off again on ' + who + '. Only these lines are taken out; nothing else on the website is touched.' }),
+        turningOn ? h('p', { class: 'muted small', text: 'Each website is tested first and put back as it was if anything does not look right.' }) : null);
+      if (!await dialog({ title: turningOn ? title + '?' : 'Turn off: ' + title + '?', content, ok: turningOn ? 'Turn on' : 'Turn off', danger: !turningOn })) return;
+      const body = Object.assign({ rule: key, confirmed: true }, names ? { domains: names } : { all: true });
+      const r = await act('/api/botguard/' + action, body);
+      if (r.ok) await refresh();
+    }
+    const ctl = {
+      get tab() { return S.botTab; },
+      pick: k => { S.botTab = k; try { sessionStorage.setItem('cps-bot-tab', k); } catch (e) { /* private mode: only for this visit */ } paint(); },
+      enable: (names, count) => run('enable', names, count), disable: (names, count) => run('disable', names, count),
+      rescan: async () => { await act('/api/botguard/scan', {}); await refresh(); },
+    };
+    paint();
+    if (data.scan.status === 'running' || data.job.status === 'running') poll();
+    return h('div', { class: 'stack' },
+      pageHead('Bot protection', 'Closes the doors that bots try on every WordPress website: password guessing, private files and account names.'), holder);
+  }
+
   // ------------------------------------------------------------------ no PHP in the uploads folders
   const GUARD_STATUS = {
     on: ['On', 'ok'], off: ['Off', ''], changed: ['Changed by hand', 'warn'],
@@ -1934,7 +2068,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, botguard: viewBotGuard, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
