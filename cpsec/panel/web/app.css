@@ -334,6 +334,12 @@ tr.updating td { background: var(--surface-2); }
 .login-row:hover { background: var(--surface-2); }
 .login-row.is-ready { box-shadow: inset 3px 0 0 var(--ok); }
 .login-row.is-warn { box-shadow: inset 3px 0 0 var(--warn); }
+/* the same row without the account column (No PHP in uploads) */
+.guard-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "site actions"; align-items: center; gap: .6rem 1.5rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 0 transparent; }
+.guard-row:last-child { border-bottom: 0; }
+.guard-row:hover { background: var(--surface-2); }
+.guard-row.is-ready { box-shadow: inset 3px 0 0 var(--ok); }
+.guard-row.is-warn { box-shadow: inset 3px 0 0 var(--warn); }
 .lr-site { grid-area: site; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem; }
 .lr-name, .site-name { font-size: 1.15rem; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
 .lr-note { flex-basis: 100%; color: var(--muted); font-size: .88rem; }
@@ -352,6 +358,7 @@ tr.updating td { background: var(--surface-2); }
 /* phones: everything under each other, buttons as wide as the row */
 @media (max-width: 720px) {
   .login-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "site" "who" "actions"; align-items: stretch; gap: .65rem; padding: .95rem 1rem; }
+  .guard-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "site" "actions"; align-items: stretch; gap: .65rem; padding: .95rem 1rem; }
   .lr-actions { justify-content: stretch; }
   .lr-actions .btn { flex: 1 1 0; min-width: 0; }
 }

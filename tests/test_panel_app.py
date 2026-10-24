@@ -687,7 +687,7 @@ class LiveDataRoutes(PanelCase):
 
     def test_every_page_answers_without_an_internal_error(self):
         paths = ["/api/me", "/api/overview", "/api/blocked", "/api/access", "/api/ports", "/api/headers", "/api/serverfw", "/api/wpupdate", "/api/firewall",
-                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies",
+                 "/api/updates", "/api/uploads", "/api/logins", "/api/copies", "/api/phpguard",
                  "/api/settings", "/api/settings/blocker", "/api/activity", "/api/advisor", "/api/setup",
                  "/api/overview?refresh=1", "/api/advisor?refresh=1"]
         for path in paths:
@@ -1263,3 +1263,115 @@ class SavedCopies(PanelCase):
         names = [e["event"] for e in self.request("GET", "/api/activity")[1]["events"]]
         self.assertIn("COPIES_KEEP", names)
         self.assertIn("COPIES_DELETE", names)
+
+
+class PhpGuardPage(PanelCase):
+    """The 'no PHP in uploads' page's routes, on the made-up server."""
+
+    def setUp(self):
+        super().setUp()
+        self.login()
+
+    def sites(self):
+        return {s["site"]: s for s in self.request("GET", "/api/phpguard")[1]["sites"]}
+
+    def test_the_page_gets_every_website_with_its_state(self):
+        resp, data = self.request("GET", "/api/phpguard")
+        self.assertEqual(resp.status, 200)
+        for key in ("scan", "sites", "job"):
+            self.assertIn(key, data)
+        rows = self.sites()
+        self.assertEqual((rows["shop.example.com"]["status"], rows["staging.example.com"]["status"], rows["blog.example.com"]["status"]), ("on", "changed", "off"))
+        self.assertFalse(rows["example.org"]["checked"])
+        for row in rows.values():
+            for key in ("site", "checked", "status", "problem"):
+                self.assertIn(key, row)
+
+    def test_switching_on_needs_an_explicit_yes(self):
+        resp, data = self.request("POST", "/api/phpguard/enable", {"domains": ["blog.example.com"]})
+        self.assertEqual((resp.status, data["code"]), (409, "needs_confirm"))
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "off")
+        self.assertEqual(self.request("POST", "/api/phpguard/enable", {"domains": ["blog.example.com"], "confirmed": "yes"})[0].status, 409)
+
+    def test_one_website_can_be_switched_on_and_off_again(self):
+        resp, data = self.request("POST", "/api/phpguard/enable", {"domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "on")
+        job = self.request("GET", "/api/phpguard")[1]["job"]
+        self.assertEqual((job["action"], job["counts"]["done"]), ("enable", 1))
+        resp, data = self.request("POST", "/api/phpguard/disable", {"domains": ["blog.example.com"], "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual(self.sites()["blog.example.com"]["status"], "off")
+
+    def test_all_websites_means_the_ones_that_need_it(self):
+        resp, data = self.request("POST", "/api/phpguard/enable", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.assertEqual({n: s["status"] for n, s in self.sites().items() if s["checked"]}, {"shop.example.com": "on", "staging.example.com": "on", "blog.example.com": "on"})
+        resp, data = self.request("POST", "/api/phpguard/enable", {"all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+
+    def test_the_websites_must_be_named_or_all(self):
+        for body in ({"confirmed": True}, {"domains": [], "confirmed": True}, {"domains": "blog.example.com", "confirmed": True}, {"domains": [5], "confirmed": True}):
+            self.assertEqual(self.request("POST", "/api/phpguard/enable", body)[0].status, 400, body)
+
+    def test_looking_again_is_a_post(self):
+        self.assertEqual(self.request("POST", "/api/phpguard/scan", {})[0].status, 200)
+        self.assertEqual(self.request("GET", "/api/phpguard/scan")[0].status, 405)
+
+    def test_everything_needs_a_session_and_changes_need_the_secret_token(self):
+        self.csrf = ""
+        for path in ("/api/phpguard/enable", "/api/phpguard/disable"):
+            self.assertEqual(self.request("POST", path, {"all": True, "confirmed": True})[0].status, 403, path)
+        self.assertEqual(self.request("POST", "/api/phpguard/scan", {})[0].status, 403)
+        self.cookie = ""
+        self.assertEqual(self.request("GET", "/api/phpguard")[0].status, 401)
+
+    def test_switching_on_and_off_is_written_to_the_activity_log(self):
+        self.request("POST", "/api/phpguard/enable", {"domains": ["blog.example.com"], "confirmed": True})
+        self.request("POST", "/api/phpguard/disable", {"domains": ["blog.example.com"], "confirmed": True})
+        names = [e["event"] for e in self.request("GET", "/api/activity")[1]["events"]]
+        self.assertIn("PHP_GUARD_ENABLE", names)
+        self.assertIn("PHP_GUARD_DISABLE", names)
+
+
+class PhpGuardOnTheRealEngine(PanelCase):
+    """The real engine works out 'all websites' from what the page shows: the same ones the button counts."""
+
+    def setUp(self):
+        super().setUp()
+        from cpsec.panel.engine import LiveEngine
+        self.engine = LiveEngine()
+        self.app = App(self.engine, secure_cookies=True, allowed_hosts=[HOST], sleep=lambda s: None, clock=lambda: self.now[0])
+        self.login()
+        rows = [{"site": n, "status": st} for n, st in (("a.example.com", "off"), ("b.example.com", "on"), ("c.example.com", "changed"),
+                                                        ("d.example.com", "unknown"), ("e.example.com", "unsupported"))]
+        self.patch("cpsec.phpguard._names", return_value=[r["site"] for r in rows])
+        self.patch("cpsec.phpguard.state", return_value={"scan": {"status": "done", "finished": ""}, "sites": rows})
+        from cpsec.util import Result
+        self.start = self.patch("cpsec.phpguard.start", return_value=Result(True, "Started"))
+
+    def test_turn_on_for_all_means_the_ones_that_are_off_or_changed(self):
+        resp, data = self.request("POST", "/api/phpguard/enable", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.start.assert_called_once_with("enable", ["a.example.com", "c.example.com"])
+
+    def test_turn_off_for_all_means_the_ones_that_have_it(self):
+        resp, data = self.request("POST", "/api/phpguard/disable", {"all": True, "confirmed": True})
+        self.assertEqual(resp.status, 200, data)
+        self.start.assert_called_once_with("disable", ["b.example.com", "c.example.com"])
+
+    def test_named_websites_are_passed_on_as_they_are(self):
+        self.request("POST", "/api/phpguard/enable", {"domains": [" d.example.com "], "confirmed": True})
+        self.start.assert_called_once_with("enable", ["d.example.com"])
+
+    def test_nothing_to_do_is_said_plainly(self):
+        self.patch("cpsec.phpguard.state", return_value={"scan": {"status": "done", "finished": ""}, "sites": [{"site": "b.example.com", "status": "on"}]})
+        resp, data = self.request("POST", "/api/phpguard/enable", {"all": True, "confirmed": True})
+        self.assertEqual((resp.status, data["code"]), (400, "none"))
+        self.start.assert_not_called()
+
+    def test_it_waits_while_the_setup_is_running(self):
+        self.engine.runner.running = lambda: True
+        resp, data = self.request("POST", "/api/phpguard/enable", {"domains": ["a.example.com"], "confirmed": True})
+        self.assertFalse(data["ok"])
+        self.start.assert_not_called()

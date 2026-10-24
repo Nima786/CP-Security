@@ -66,7 +66,8 @@ Rule for everything here: explained in plain words, shown on a page, and the own
   the Open ports page now says when the server firewall is what refuses a port
 - ✅ One-click admin login: "Open admin" per website, a signed link that works once for one minute, through a small tested helper file installed only on request (works with custom login addresses; skips a website's own 2-step login)
 - ⬜ Security headers on OpenLiteSpeed (its `.htaccess` ignores header lines, so they go into the virtual host instead)
-- ⬜ Block PHP in uploads folders and hide backups, logs and other sensitive files (per website, with a self-test)
+- ✅ Block PHP in uploads folders (per website, proved with a harmless test file, put back if the website gets worse)
+- ⬜ Hide backups, logs and other sensitive files (per website, with a self-test)
 - ⬜ Daily scan for backdoors and changed WordPress files
 - ⬜ Known-vulnerable plugin and theme check
 - ⬜ Alerts (Telegram / email) for new backdoors, a blocker or website going down, certificate expiry

@@ -30,6 +30,7 @@
     access: 'M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z',
     firewall: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z',
     logins: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
+    phpguard: 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM9.4 18.4L8 17l2.6-2.6L8 11.8l1.4-1.4 2.6 2.6 2.6-2.6 1.4 1.4-2.6 2.6L16 17l-1.4 1.4-2.6-2.6-2.6 2.6zM13 9V3.5L18.5 9H13z',
     updates: 'M17.65 6.35A7.96 7.96 0 0012 4a8 8 0 108 8h-2a6 6 0 11-1.76-4.24L13 11h7V4l-2.35 2.35z',
     settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
     check: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
@@ -174,6 +175,7 @@
     ['serverfw', 'Server firewall', 'serverfw', 'Server FW', 'Protection', false],
     ['headers', 'Security headers', 'headers', 'Headers', 'Protection', false],
     ['firewall', 'Web firewall', 'firewall', 'Firewall', 'Protection', true],
+    ['phpguard', 'No PHP in uploads', 'phpguard', 'Uploads', 'Protection', false],
     ['updates', 'WP Updates', 'updates', 'WP Updates', 'Protection', false],
     ['logins', 'One-click login', 'logins', 'Login', 'Protection', false],
     ['setup', 'Setup', 'setup', 'Setup', 'Manage', false],
@@ -1586,6 +1588,103 @@
       pageHead('One-click login', 'Open the dashboard of any website from here, signed in, without typing a password.'), holder);
   }
 
+  // ------------------------------------------------------------------ no PHP in the uploads folders
+  const GUARD_STATUS = {
+    on: ['On', 'ok'], off: ['Off', ''], changed: ['Changed by hand', 'warn'],
+    unknown: ['Not read yet', ''], unsupported: ['Cannot be used here', 'warn'],
+  };
+
+  function renderPhpGuard(data, ctl) {
+    const sites = data.sites || [];
+    const job = data.job || { status: 'idle', items: [] };
+    const working = job.status === 'running';
+    const scanning = data.scan && data.scan.status === 'running';
+    const on = sites.filter(s => s.status === 'on');
+    const canTurnOn = sites.filter(s => s.checked && ['off', 'changed'].includes(s.status));
+    const inJob = Object.fromEntries((job.items || []).map(i => [i.site, i]));
+
+    const rows = sites.map(s => {
+      const [label, kind] = GUARD_STATUS[s.status] || [s.status, ''];
+      const ji = working ? inJob[s.site] : null;
+      const buttons = [];
+      if (s.checked && (s.status === 'off' || s.status === 'changed')) {
+        const again = s.status === 'changed';
+        buttons.push(h('button', { class: 'btn' + (again ? '' : ' primary'), type: 'button', disabled: working, 'aria-label': 'Turn the protection on for ' + s.site, text: again ? 'Turn on again' : 'Turn on', onclick: () => ctl.enable([s.site]) }));
+      }
+      if (s.status === 'on' || s.status === 'changed') buttons.push(h('button', { class: 'btn', type: 'button', disabled: working, 'aria-label': 'Turn the protection off for ' + s.site, text: 'Turn off', onclick: () => ctl.disable([s.site]) }));
+      const tone = s.status === 'on' ? ' is-ready' : (s.status === 'changed' || s.status === 'unsupported' ? ' is-warn' : '');
+      return h('div', { class: 'guard-row' + tone },
+        h('div', { class: 'lr-site' },
+          h('strong', { class: 'lr-name', text: s.site }),
+          ji ? (ji.status === 'working' ? workingBadge('Working\u2026') : ji.status === 'waiting' ? badge('In line', '') : badge(ji.status === 'done' ? 'done' : 'failed', ji.status === 'done' ? 'ok' : 'bad')) : badge(label, kind),
+          ji && ji.status === 'working' && ji.step ? h('div', { class: 'lr-note', text: ji.step }) : null,
+          s.problem ? h('div', { class: 'lr-note', text: s.problem }) : null),
+        buttons.length ? h('div', { class: 'lr-actions' }, buttons) : null);
+    });
+
+    const last = job.status !== 'idle' && (job.items || []).length ? h('section', { class: 'card flush' },
+      h('div', { class: 'card-head' }, working ? h('div', { class: 'spinner small-spin', style: 'margin:0' }) : null,
+        h('h2', { 'aria-live': 'polite', text: working ? (job.action === 'enable' ? 'Turning on\u2026' : 'Turning off\u2026') : 'Finished' }),
+        job.counts.done ? badge(job.counts.done + ' done', 'ok') : null, job.counts.failed ? badge(job.counts.failed + ' failed', 'bad') : null),
+      table(['Website', 'Result'], job.items.map(i => h('tr', {}, h('td', {}, h('strong', { class: 'lr-name', text: i.site })),
+        h('td', {}, i.status === 'working' ? workingBadge('Working\u2026') : i.status === 'waiting' ? badge('In line', '') : badge(i.status === 'done' ? 'done' : 'failed', i.status === 'done' ? 'ok' : 'bad'),
+          h('div', { class: 'small ' + (i.status === 'failed' ? '' : 'muted'), text: i.status === 'working' ? i.step : i.message })))), '')) : null;
+
+    return h('div', { class: 'stack' },
+      h('section', { class: 'card login-intro' },
+        h('p', { text: 'The uploads folder is where a website keeps its photos and documents. A common bot attack uses a hole in a plugin to save a small program (a PHP file) there, then opens it by its web address to take over the website. With this turned on, the web server refuses to run any PHP file that is opened from the uploads folder. Photos, documents and downloads work exactly as before.' }),
+        h('div', { class: 'note', text: 'Before it is kept on a website, a harmless test file is put in the uploads folder: it must run first and be refused afterwards, and the website and its pictures must still load. If anything is wrong, the website is put back as it was. The test file is always removed. You can turn it off again at any time.' }),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', type: 'button', disabled: working || !canTurnOn.length, text: canTurnOn.length ? 'Turn on for ' + canTurnOn.length + ' website' + (canTurnOn.length > 1 ? 's' : '') + '\u2026' : 'On everywhere', onclick: () => ctl.enable(null, canTurnOn.length) }),
+          on.length ? h('button', { class: 'btn', type: 'button', disabled: working, text: on.length === 1 ? 'Turn off for 1 website\u2026' : 'Turn off for all ' + on.length + '\u2026', onclick: () => ctl.disable(null, on.length) }) : null,
+          scanning ? h('span', { class: 'row muted small' }, h('span', { class: 'dot-spin', 'aria-hidden': 'true' }), 'looking at the websites\u2026') : null),
+        h('p', { class: 'muted small', style: 'margin:.8rem 0 0', text: 'A very rare plugin opens a PHP file of its own from the uploads folder by web address. If something on a website stops working after this is turned on, turn it off for that website.' })),
+      last,
+      h('section', { class: 'card flush' }, h('div', { class: 'card-head' }, h('h2', { text: 'Websites' }), badge(on.length + ' of ' + sites.length + ' protected', on.length ? 'ok' : ''),
+        h('button', { class: 'btn small right', type: 'button', disabled: scanning || working, text: 'Check again', onclick: ctl.rescan })),
+        rows.length ? rows : empty('No WordPress websites were found on this server.')));
+  }
+
+  async function viewPhpGuard() {
+    let data = (await api('/api/phpguard')).data;
+    const holder = h('div', {}, null);
+    const paint = () => holder.replaceChildren(renderPhpGuard(data, ctl));
+    const poll = () => {
+      clearInterval(S.pollTimer);
+      S.pollTimer = setInterval(async () => {
+        if (S.view !== 'phpguard') { clearInterval(S.pollTimer); return; }
+        const was = data.job.status;
+        data = (await api('/api/phpguard')).data;
+        paint();
+        if (was === 'running' && data.job.status !== 'running') toast(data.job.counts.failed ? 'Finished. Some websites need a look.' : 'Finished.', data.job.counts.failed ? 'bad' : 'ok');
+        if (data.scan.status !== 'running' && data.job.status !== 'running') clearInterval(S.pollTimer);
+      }, 1500);
+    };
+    const refresh = async () => { data = (await api('/api/phpguard')).data; paint(); if (data.scan.status === 'running' || data.job.status === 'running') poll(); };
+
+    async function run(action, names, count) {
+      const many = names ? names.length : count;
+      const turningOn = action === 'enable';
+      const who = names ? names[0] + (names.length > 1 ? ' and ' + (names.length - 1) + ' more' : '') : many + ' website' + (many > 1 ? 's' : '');
+      const content = h('div', {},
+        h('p', { text: turningOn
+          ? 'PHP files in the uploads folder of ' + who + ' will no longer run when somebody opens them by web address. One website at a time, about half a minute each.'
+          : 'PHP files in the uploads folder of ' + who + ' will be able to run from the web again, as before. Nothing else on the website is touched.' }),
+        turningOn ? h('p', { class: 'muted small', text: 'Each website is tested with a harmless file first and put back as it was if anything does not look right.' }) : null);
+      if (!await dialog({ title: turningOn ? 'Turn on the uploads protection?' : 'Turn off the uploads protection?', content, ok: turningOn ? 'Turn on' : 'Turn off', danger: !turningOn })) return;
+      const r = await act('/api/phpguard/' + action, names ? { domains: names, confirmed: true } : { all: true, confirmed: true });
+      if (r.ok) await refresh();
+    }
+    const ctl = {
+      enable: (names, count) => run('enable', names, count), disable: (names, count) => run('disable', names, count),
+      rescan: async () => { await act('/api/phpguard/scan', {}); await refresh(); },
+    };
+    paint();
+    if (data.scan.status === 'running' || data.job.status === 'running') poll();
+    return h('div', { class: 'stack' },
+      pageHead('No PHP in uploads', 'Stops the most common bot attack on WordPress: running a program that was slipped into the uploads folder.'), holder);
+  }
+
   // ------------------------------------------------------------------ settings
   const minutes = seconds => Math.round(seconds / 60);
 
@@ -1835,7 +1934,7 @@
   }
 
   // ------------------------------------------------------------------ drawing
-  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, setup: viewSetup, settings: viewSettings };
+  const VIEWS = { overview: viewOverview, advisor: viewAdvisor, blocked: viewBlocked, access: viewAccess, ports: viewPorts, serverfw: viewServerFw, headers: viewHeaders, firewall: viewFirewall, updates: viewUpdates, logins: viewLogins, phpguard: viewPhpGuard, setup: viewSetup, settings: viewSettings };
 
   function currentView() {
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1];

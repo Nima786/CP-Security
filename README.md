@@ -19,6 +19,7 @@ CyberPanel server and managed from a browser without touching a terminal.
 | **Security headers** | Small instructions every website sends to browsers (LiteSpeed Enterprise). A safe set is on, the risky ones are off, per website, checked on the live site and undone if a site stops answering. |
 | **WordPress updates** | You see what is waiting on each website and update plugins and themes by hand, one at a time. A copy is saved first, the site is checked afterwards, and the old version is put back if it broke. For plugins that cannot update by themselves you upload the maker's zip once and update every website that has it. The copies saved before each update are listed with their size, can be deleted from the panel, and you choose how many are kept. Nothing ever updates by itself. |
 | **One-click login** | "Open admin" next to a website opens its dashboard, signed in, with a link that works once for one minute. Works with custom login addresses. Installed per website only when you press a button (one small file, tested before it is switched on, removable any time); it skips the website's own 2-step login, so the panel's login is the gate. |
+| **No PHP in uploads** | Stops the most common bot attack: a program slipped into a website's uploads folder (where photos go) through a plugin hole, then opened by its web address. A switch per website, tested with a harmless file before it is kept, and put back if anything looks wrong. |
 | **Setup** | A plan you can read first, then one button. Each step undoes itself if something goes wrong, and the whole thing is safe to run again. |
 
 ### It does not fight CyberPanel
@@ -67,7 +68,7 @@ An optional authenticator-app code can be switched on in Settings. Without a que
 * **Terminal menu** – type `security` on the server. Numbered, plain-English, everything undoable.
   `security advice`, `security setup`, `security selftest` do one thing each.
 * **Browser panel** – the same things with buttons: Overview · Advisor · Blocked · Admin access ·
-  Open ports · Server firewall · Security headers · Web firewall · WP Updates · One-click login · Setup · Settings. Every protection is explained in
+  Open ports · Server firewall · Security headers · Web firewall · No PHP in uploads · WP Updates · One-click login · Setup · Settings. Every protection is explained in
   plain words and every one can be switched on or off by the owner, for all websites or for a single one.
 
 Try the panel on any computer with made-up data (nothing on the machine is touched):

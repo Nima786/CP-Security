@@ -151,6 +151,10 @@ class App:
             ("POST", "/api/logins/remove"): (self.api_logins_remove, True),
             ("POST", "/api/logins/user"): (self.api_logins_user, True),
             ("POST", "/api/logins/open"): (self.api_logins_open, True),
+            ("GET", "/api/phpguard"): (self.api_phpguard, True),
+            ("POST", "/api/phpguard/scan"): (self.api_phpguard_scan, True),
+            ("POST", "/api/phpguard/enable"): (self.api_phpguard_enable, True),
+            ("POST", "/api/phpguard/disable"): (self.api_phpguard_disable, True),
             ("GET", "/api/copies"): (self.api_copies, True),
             ("POST", "/api/copies/delete"): (self.api_copies_delete, True),
             ("POST", "/api/copies/keep"): (self.api_copies_keep, True),
@@ -713,6 +717,28 @@ class App:
         res, url = self.engine.logins_open(site, to)
         activity.write("ADMIN_LOGIN_OPEN", ip=req.ip, site=site, ok=res.ok, code=res.code)
         return _result(res, url=url)
+
+    # ------------------------------------------------------------------ no PHP in the uploads folders
+    def api_phpguard(self, req, session):
+        return _json(200, self.engine.phpguard_state())
+
+    def api_phpguard_scan(self, req, session):
+        return _result(self.engine.phpguard_scan())
+
+    def _phpguard_run(self, req, action):
+        b = req.json()
+        if b.get("confirmed") is not True:
+            return _json(409, {"ok": False, "code": "needs_confirm", "message": "Please confirm."})
+        names = _website_list(b)
+        res = self.engine.phpguard_run(action, names)
+        activity.write("PHP_GUARD_" + action.upper(), ip=req.ip, count="all" if names is None else len(names), ok=res.ok)
+        return _result(res)
+
+    def api_phpguard_enable(self, req, session):
+        return self._phpguard_run(req, "enable")
+
+    def api_phpguard_disable(self, req, session):
+        return self._phpguard_run(req, "disable")
 
     # ------------------------------------------------------------------ the copies saved before each update
     def api_copies(self, req, session):

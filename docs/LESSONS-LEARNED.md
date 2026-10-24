@@ -55,6 +55,11 @@ Things that cost hours to discover. They explain several design choices, so they
 * A tool that "has been installed" is not the same as one that works: check the result the way an attacker would
   see it (send harmless attack-looking requests, look at what was recorded).
 
+## Reading what commands print
+* Python's `subprocess` in text mode is strict by default: one byte that is not valid text (a picture fetched with curl to check it
+  loads) raises an error instead of returning. `util.run` therefore replaces odd bytes. A check that only needs the answer code should
+  ask curl for the code alone (`-o /dev/null -w %{http_code}`), never read the body.
+
 ## Operational
 * Run LiteSpeed changes with a graceful restart (`lswsctrl restart`) and a check of several sites afterwards.
 * CyberPanel regenerates `httpd.conf` and `modsec.conf` from its own pages. Never save the ModSecurity page there.

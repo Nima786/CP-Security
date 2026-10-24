@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from .. import (__version__, access, adminlogin, advisor, blocker, config, headers, health, htfile, library, netinfo, ports, provision,
+from .. import (__version__, access, adminlogin, advisor, blocker, config, headers, health, htfile, library, netinfo, phpguard, ports, provision,
                 selfupdate, serverfw, settings, sites, tls, updates, util, waf, webserver, wpupdate)
 from ..util import Result
 
@@ -513,6 +513,34 @@ class LiveEngine:
     def logins_open(self, site, to=""):
         return adminlogin.make_link(site, to)
 
+    # ------------------------------------------------------------------ no PHP in the uploads folders
+    def _phpguard_names(self):
+        try:
+            return phpguard._names()
+        except (ImportError, OSError):                          # not a Linux server: there are no websites to list
+            return []
+
+    def phpguard_state(self):
+        if phpguard.scan_state()["status"] == "idle":           # first look after a restart of the panel
+            phpguard.scan_start()
+        data = phpguard.state(self._phpguard_names())
+        data["job"] = phpguard.job_state()
+        return data
+
+    def phpguard_scan(self):
+        return phpguard.scan_start()
+
+    def phpguard_run(self, action, names):
+        busy = self._guard()
+        if busy:
+            return busy
+        if names is None:                                       # "all": the ones that need it (enable) or have it (disable)
+            current = {s["site"]: s["status"] for s in phpguard.state(self._phpguard_names())["sites"]}
+            names = [n for n, st in current.items() if (st in ("off", "changed") if action == "enable" else st in ("on", "changed"))]
+            if not names:
+                return Result(False, "There is nothing to turn %s." % ("on" if action == "enable" else "off"), "none")
+        return phpguard.start(action, names)
+
     # ------------------------------------------------------------------ the copies saved before each update
     def copies_state(self):
         return wpupdate.copies_state()
@@ -663,6 +691,8 @@ class DemoEngine:
         self.port_choices = {"locked": [], "opened": [], "accepted": []}
         self.login_helper, self.login_choice = {"shop.example.com": "installed", "staging.example.com": "changed"}, {}
         self.login_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
+        self.guard_status = {"shop.example.com": "on", "staging.example.com": "changed", "blog.example.com": "off"}
+        self.guard_job = {"status": "idle", "action": "", "items": [], "started": "", "finished": "", "counts": {"waiting": 0, "working": 0, "done": 0, "failed": 0}}
         self.copy_keep = 1                                    # saved copies from earlier updates (kind, name, time stamp, size in KB)
         self.copy_data = {"shop.example.com": [("plugin", "woocommerce", "20261019-093000", 31200), ("plugin", "woocommerce", "20261012-081500", 30900),
                                                ("theme", "bricks", "20261012-081500", 9800), ("database", "", "20261019-093000", 18400)],
@@ -1334,6 +1364,35 @@ class DemoEngine:
         if self.login_helper.get(site) != "installed":
             return Result(False, "The helper is not installed (or was changed) on this website. Install it first.", "not_installed"), ""
         return Result(True, "Opening %s as %s." % (site, self.login_choice.get(site) or self.DEMO_ADMINS[site][0]["login"])), "https://%s/?cps-login=demo-link" % site
+
+    def phpguard_state(self):
+        sites = []
+        for name in self.DEMO_SITES:
+            if name == "example.org":
+                sites.append({"site": name, "checked": False, "status": "unknown", "problem": "WordPress could not be started on this website."})
+                continue
+            status = self.guard_status.get(name, "off")
+            problem = "The CP-Security lines in the uploads folder were changed by hand." if status == "changed" else ""
+            sites.append({"site": name, "checked": True, "status": status, "problem": problem})
+        return {"scan": {"status": "done", "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, "sites": sites, "job": self.guard_job}
+
+    def phpguard_scan(self):
+        return Result(True, "Looking at the websites.")
+
+    def phpguard_run(self, action, names):
+        current = {s["site"]: s["status"] for s in self.phpguard_state()["sites"] if s["checked"]}
+        if names is None:
+            names = [n for n, st in current.items() if (st in ("off", "changed") if action == "enable" else st in ("on", "changed"))]
+        names = [n for n in names if n in current]
+        if not names:
+            return Result(False, "There is nothing to turn %s." % ("on" if action == "enable" else "off"), "none")
+        for n in names:
+            self.guard_status[n] = "on" if action == "enable" else "off"
+        words = "PHP files in the uploads folder of %s can no longer be run from the web. Tested." if action == "enable" else "PHP files in the uploads folder of %s can run from the web again (as before)."
+        self.guard_job = {"status": "done", "action": action, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+                          "items": [{"site": n, "status": "done", "message": words % n, "step": ""} for n in names],
+                          "counts": {"waiting": 0, "working": 0, "done": len(names), "failed": 0}}
+        return Result(True, "Started on %d website%s." % (len(names), "" if len(names) == 1 else "s"))
 
     def copies_state(self):
         rows = []

@@ -12,10 +12,13 @@ Result = namedtuple("Result", "ok message code", defaults=("",))
 
 
 def run(cmd, timeout=60):
-    """Run a command. Returns (exit code, combined output). Never raises."""
+    """Run a command. Returns (exit code, combined output). Never raises.
+
+    Output that is not text (a picture fetched to check that it loads, a page in an old encoding) is kept with the odd bytes
+    replaced: found on the real server, where the strict default made the check crash instead of answering."""
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           universal_newlines=True, timeout=timeout)
+                           universal_newlines=True, errors="replace", timeout=timeout)
         return p.returncode, p.stdout
     except subprocess.TimeoutExpired:
         return 124, "timed out"
@@ -28,7 +31,7 @@ def run_with_file(cmd, path, timeout=600):
     try:
         with open(path, "rb") as f:
             p = subprocess.run(cmd, stdin=f, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               universal_newlines=True, timeout=timeout)
+                               universal_newlines=True, errors="replace", timeout=timeout)
         return p.returncode, p.stdout
     except subprocess.TimeoutExpired:
         return 124, "timed out"

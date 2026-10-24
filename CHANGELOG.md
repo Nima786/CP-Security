@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.5
+* **No PHP in uploads** (new page, one switch per website and one for all). The uploads folder is where a website keeps its photos and
+  documents. The most common bot attack on WordPress uses a plugin hole to save a small program (a PHP file) there and then opens it by
+  its web address. This is how the server was broken into in October (bots kept trying the same door afterwards, hundreds of times).
+  With the switch on, the web server refuses to run any PHP file that is opened from the uploads folder, in every spelling bots use
+  (.php, .PHP, .php7, .phtml, .phar and so on). Photos, documents and downloads work exactly as before.
+  * **Nothing switches on by itself.** You choose the websites; "Turn off" takes it away again.
+  * **Proved before it is kept:** a harmless test file is put into the uploads folder; it must run first and be refused afterwards (so
+    the web server really applies the rule), and the website, its login page and a picture from the uploads folder must still load. If
+    anything is wrong, the folder's settings file is put back as it was. The test file is always removed.
+  * The rule is a small block of lines in the uploads folder's own settings file, between marker lines; lines that were already there
+    are never changed, and "Turn off" removes only that block. Everything is done as the website's own user.
+  * Checked on the real server (test.homplast.com): planted files with five different PHP spellings were refused, pictures and the
+    website kept working, and after "Turn off" the folder was exactly as before. It was left off there; you decide where to turn it on.
+  * Honest limit, stated on the page: it stops this common attack. A very rare plugin that opens its own PHP file from the uploads folder
+    by web address would stop working there; turn it off for that website.
+* Fixed: a check that fetched a picture could crash on its bytes instead of answering (found while proving the switch on the server).
 ## 0.9.4
 * **One saved copy is now the default.** After an update the panel keeps only the newest copy of each plugin or theme, and the newest
   database copy, instead of the newest three. That is enough to go back one step if something shows up later. You can still choose up to

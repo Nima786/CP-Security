@@ -123,6 +123,16 @@ and only runs once the new lock, blocker, login watcher and firewall are live.
   look for PHP crash text), put the copy back if it got worse. Putting files back cannot undo database changes made by
   an update; that is why the database copy exists and why the panel says so. Roll-back and clean-up go through `su` as
   the site user, never as root, because a hacked site could plant a link that makes root overwrite a system file.
+* **No PHP in uploads (`phpguard.py`).** The uploads folder comes from WordPress (`wp_get_upload_dir()['basedir']`) and must be inside the
+  website's web folder (otherwise there is nothing to protect). The rule is a marked block at the top of `<uploads>/.htaccess`:
+  `<FilesMatch "(?i)\.(php[0-9]?|phtml|phar|pht|phps|shtml?)$"> Require all denied </FilesMatch>` (both this and the older
+  `Deny from all` form were seen to work on LiteSpeed Enterprise; it notices the change after about 6 to 8 seconds, so the proof asks
+  again for up to 24). Switching on: refuse a website that is not answering; write a random-named test PHP file; it must answer 200
+  with its marker; write the block (as the site user, through a temporary file and a rename, keeping the file's mode); the same file
+  must now answer 403 without the marker; home, login and one picture from the uploads folder must still be as good as before; any
+  failure puts the old file back (or removes it when there was none). The test file is removed in every case. A link in place of the
+  `.htaccess`, or damaged marker lines, are refused, never guessed at. Switching off removes only the block (and the file when it held
+  nothing else).
 * **Saved copies are listed, limited and deleted from the panel (`wpupdate.copies*`).** The folder is the website's own `cps-backups`
   (mode 700). Only names the panel makes are recognised (`plugin|theme-<slug>-<date>-<time>`, `db-<date>-<time>.sql`, strict patterns), listed
   with `du` as the website's user, and only those are removed, as that user, never a name taken from the browser. Deleting is refused
